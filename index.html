@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ball Studio</title>
+  </head>
+  <body>
+    <header>
+      <h1>Ball Studio</h1>
+      <div class="header-actions">
+        <button id="btn-save" type="button">💾 Lưu preset</button>
+        <label class="file-btn">📂 Mở preset<input id="file-preset" type="file" accept=".json,application/json" hidden /></label>
+        <button id="btn-reset" type="button">↺ Mặc định</button>
+      </div>
+      <span id="codec-status" class="codec">Đang kiểm tra bộ mã hóa…</span>
+    </header>
+    <main>
+      <aside id="panel"></aside>
+      <section class="stage">
+        <div id="canvas-wrap" class="canvas-wrap"></div>
+        <div class="toolbar">
+          <button id="btn-play" type="button">⏸ Tạm dừng</button>
+          <button id="btn-restart" type="button">⟲ Chạy lại</button>
+          <button id="btn-seed" type="button">🎲 Seed ngẫu nhiên</button>
+          <span id="stats" class="stats"></span>
+        </div>
+        <p class="hint">Bấm ▶/⟲ một lần để bật âm thanh xem trước (trình duyệt chặn tự phát tiếng).</p>
+        <div class="export">
+          <div class="export-row">
+            <button id="btn-export" type="button" class="primary">⬇ Xuất MP4</button>
+            <span class="batch">
+              <button id="btn-batch" type="button">Xuất hàng loạt</button>
+              <input id="batch-count" type="number" min="1" max="50" value="5" title="Số video (seed liên tiếp)" />
+              <span>video</span>
+            </span>
+            <button id="btn-cancel" type="button" hidden>✕ Hủy</button>
+          </div>
+          <div id="export-info" class="hint"></div>
+          <progress id="export-bar" value="0" max="1"></progress>
+          <div id="export-status" class="status"></div>
+        </div>
+      </section>
+    </main>
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
