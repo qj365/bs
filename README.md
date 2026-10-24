@@ -34,6 +34,13 @@ Công cụ tự làm video "bóng nảy" kiểu satisfying/ASMR cho TikTok, Shor
 - **6 bài public domain có sẵn**, hoặc phát theo thang âm.
 - **Hiệu ứng âm thanh:** vỡ kính, nổ, vật phẩm, kết thúc.
 
+**🎲 Tạo video ngẫu nhiên** (phím `G`):
+- Một lần bấm sẽ tự chọn kiểu video, biến thể, thông số, bảng màu, nhạc cụ, bài nhạc và câu hook (tiếng Việt hoặc tiếng Anh).
+- Với kiểu video tự kết thúc, công cụ **tìm luôn seed để video kết thúc trong khoảng độ dài bạn đặt** (ví dụ 15–40 giây) và cắt video ngay sau đoạn kết.
+- Có thể khóa giữ nguyên từng nhóm: kiểu và vật lý, màu sắc, âm thanh, chữ. Thiết lập xuất video (độ phân giải, fps, bitrate, watermark, vùng an toàn, GPU/CPU) luôn được giữ nguyên.
+- **🎬 Tạo & xuất N video:** mỗi video một cấu hình ngẫu nhiên khác nhau, xuất lần lượt thành `…-random1.mp4`, `…-random2.mp4`, …
+- Bấm hoàn tác (↶) để quay lại video trước.
+
 **Tìm seed tự động:** thử hàng trăm đến hàng nghìn seed trong nền để tìm video **kết thúc đúng số giây** bạn cần, hoặc **kết thúc đúng lúc bài nhạc chơi hết**. Bấm vào kết quả để xem ngay.
 
 **Xuất video:**

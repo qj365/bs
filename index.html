@@ -54,6 +54,34 @@
         </div>
         <p id="audio-hint" class="hint">🔈 Bấm ▶ hoặc ⟲ một lần để bật tiếng xem trước (trình duyệt chặn tự phát tiếng).</p>
         <div class="cards">
+          <div class="card random-card">
+            <h3>🎲 Tạo video ngẫu nhiên</h3>
+            <p class="hint">Tự chọn kiểu video, biến thể, thông số, bảng màu, nhạc cụ, bài nhạc và câu hook — rồi tìm seed để video kết thúc đúng độ dài bạn muốn.</p>
+            <div class="lock-row">
+              <span class="hint">Giữ nguyên:</span>
+              <label class="inline"><input id="lock-mode" type="checkbox" /> Kiểu &amp; vật lý</label>
+              <label class="inline"><input id="lock-look" type="checkbox" /> Màu sắc</label>
+              <label class="inline"><input id="lock-audio" type="checkbox" /> Âm thanh</label>
+              <label class="inline"><input id="lock-text" type="checkbox" /> Chữ</label>
+            </div>
+            <div class="search-row">
+              <label class="inline">Dài <input id="rand-min" type="number" min="3" max="600" value="15" aria-label="Tối thiểu (giây)" /> –
+                <input id="rand-max" type="number" min="4" max="600" value="40" aria-label="Tối đa (giây)" /> giây</label>
+              <select id="rand-lang" aria-label="Ngôn ngữ câu hook">
+                <option value="vi">Hook tiếng Việt</option>
+                <option value="en">English hooks</option>
+              </select>
+            </div>
+            <div class="search-row">
+              <button id="btn-random" type="button" class="primary" title="Phím tắt: G">🎲 Tạo ngẫu nhiên</button>
+              <span class="batch">
+                <button id="btn-random-batch" type="button" title="Mỗi video một cấu hình ngẫu nhiên khác nhau, xuất lần lượt">🎬 Tạo &amp; xuất</button>
+                <input id="random-count" type="number" min="1" max="50" value="5" aria-label="Số video ngẫu nhiên" />
+                <span>video</span>
+              </span>
+            </div>
+            <div id="random-status" class="status"></div>
+          </div>
           <div class="card">
             <h3>⬇ Xuất video</h3>
             <div class="export-row">
@@ -97,6 +125,7 @@
         <tr><td><kbd>R</kbd></td><td>Chạy lại từ đầu</td></tr>
         <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Seed trước / sau</td></tr>
         <tr><td><kbd>N</kbd></td><td>Seed ngẫu nhiên</td></tr>
+        <tr><td><kbd>G</kbd></td><td>Tạo video ngẫu nhiên</td></tr>
         <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>Tua lùi / tới 1 giây</td></tr>
         <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Hoàn tác / làm lại</td></tr>
         <tr><td><kbd>E</kbd></td><td>Xuất MP4</td></tr>

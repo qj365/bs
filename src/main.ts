@@ -8,7 +8,9 @@ import { formatTime } from './render/hud';
 import { computeLayout, SAFE_ZONES } from './sim';
 import { pickAudioCodec, pickVideoCodec } from './export/codecs';
 import { startExport, type ExportJob } from './export/exporter';
-import type { SearchIn, SearchOut, SearchResult } from './search/protocol';
+import type { SearchResult } from './search/protocol';
+import { findSeedInWindow, startSearch, type SearchJob } from './search/client';
+import { modeFinishes, randomConfig, type HookLang, type RandomLocks } from './random';
 import { MidiEditor } from './ui/midi-editor';
 import { Panel } from './ui/panel';
 import { Preview } from './ui/preview';
@@ -345,14 +347,16 @@ async function runExport(over: Partial<Config>, label: string, prefix: string): 
   }
 }
 
+const EXPORT_BUTTONS = ['btn-export', 'btn-dual', 'btn-batch', 'btn-random-batch'];
+
 async function exporting(fn: () => Promise<void>): Promise<void> {
   cancelled = false;
-  for (const id of ['btn-export', 'btn-dual', 'btn-batch']) $<HTMLButtonElement>(id).disabled = true;
+  for (const id of EXPORT_BUTTONS) $<HTMLButtonElement>(id).disabled = true;
   $<HTMLButtonElement>('btn-cancel').hidden = false;
   try {
     await fn();
   } finally {
-    for (const id of ['btn-export', 'btn-dual', 'btn-batch']) $<HTMLButtonElement>(id).disabled = false;
+    for (const id of EXPORT_BUTTONS) $<HTMLButtonElement>(id).disabled = false;
     $<HTMLButtonElement>('btn-cancel').hidden = true;
   }
 }
@@ -382,7 +386,7 @@ $('btn-cancel').addEventListener('click', () => {
 
 // ---------------------------------------------------------------- seed search
 
-let searchWorker: Worker | null = null;
+let searchJob: SearchJob | null = null;
 
 function renderResults(results: SearchResult[]): void {
   const list = $('search-results');
@@ -405,10 +409,8 @@ $<HTMLSelectElement>('search-kind').addEventListener('change', (e) => {
   $<HTMLInputElement>('search-value').value = kind === 'notes' ? String(currentMelody().length) : String(cfg.duration);
 });
 
-$('btn-search').addEventListener('click', () => {
-  searchWorker?.terminate();
-  const worker = new Worker(new URL('./search/search.worker.ts', import.meta.url), { type: 'module' });
-  searchWorker = worker;
+$('btn-search').addEventListener('click', async () => {
+  searchJob?.stop();
   const kind = $<HTMLSelectElement>('search-kind').value as 'duration' | 'notes';
   const value = Number($<HTMLInputElement>('search-value').value) || 30;
   const count = Math.max(10, Math.min(20000, Number($<HTMLInputElement>('search-count').value) || 500));
@@ -418,35 +420,131 @@ $('btn-search').addEventListener('click', () => {
   $<HTMLButtonElement>('btn-search-stop').hidden = false;
   status.textContent = 'Đang tìm…';
   renderResults([]);
-  const finish = () => {
+  const job = startSearch(cfg, { kind, value }, cfg.seed, count, (p) => {
+    bar.max = p.total;
+    bar.value = p.done;
+    status.textContent = `Đã thử ${p.done}/${p.total} seed · ${p.rate.toFixed(0)} seed/giây`;
+    renderResults(p.results);
+  });
+  searchJob = job;
+  try {
+    const results = await job.promise;
+    status.textContent = results.length
+      ? `Xong. Bấm một kết quả để xem. Tốt nhất: seed ${results[0].seed} (lệch ${results[0].error.toFixed(2)}).`
+      : 'Không seed nào kết thúc trong khoảng thời gian này — thử chỉnh thông số hoặc tăng số seed.';
+    renderResults(results);
+  } catch (err) {
+    status.textContent = `Lỗi: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
     $<HTMLButtonElement>('btn-search').disabled = false;
     $<HTMLButtonElement>('btn-search-stop').hidden = true;
-  };
-  worker.onmessage = (ev: MessageEvent<SearchOut>) => {
-    const m = ev.data;
-    if (m.type === 'progress') {
-      bar.max = m.total;
-      bar.value = m.done;
-      status.textContent = `Đã thử ${m.done}/${m.total} seed · ${m.rate.toFixed(0)} seed/giây`;
-      renderResults(m.results);
-    } else if (m.type === 'done') {
-      status.textContent = m.results.length
-        ? `Xong. Bấm một kết quả để xem. Tốt nhất: seed ${m.results[0].seed} (lệch ${m.results[0].error.toFixed(2)}).`
-        : 'Không seed nào kết thúc trong khoảng thời gian này — thử chỉnh thông số hoặc tăng số seed.';
-      renderResults(m.results);
-      finish();
-      worker.terminate();
-    } else {
-      status.textContent = `Lỗi: ${m.message}`;
-      finish();
-      worker.terminate();
-    }
-  };
-  const msg: SearchIn = { type: 'start', cfg: cloneConfig(cfg), target: { kind, value }, seedFrom: cfg.seed, count };
-  worker.postMessage(msg);
+  }
 });
 
-$('btn-search-stop').addEventListener('click', () => searchWorker?.postMessage({ type: 'stop' } satisfies SearchIn));
+$('btn-search-stop').addEventListener('click', () => searchJob?.stop());
+
+// ---------------------------------------------------------------- random videos
+
+const LOCKS_KEY = 'ball-studio-random-v1';
+const lockIds = { mode: 'lock-mode', look: 'lock-look', audio: 'lock-audio', text: 'lock-text' } as const;
+
+(() => {
+  try {
+    const saved = JSON.parse(lsGet(LOCKS_KEY) ?? '{}') as Record<string, unknown>;
+    for (const [k, id] of Object.entries(lockIds)) $<HTMLInputElement>(id).checked = saved[k] === true;
+    if (saved.lang === 'en') $<HTMLSelectElement>('rand-lang').value = 'en';
+    if (typeof saved.min === 'number') $<HTMLInputElement>('rand-min').value = String(saved.min);
+    if (typeof saved.max === 'number') $<HTMLInputElement>('rand-max').value = String(saved.max);
+  } catch {
+    // Ignore bad saved options.
+  }
+})();
+
+function randomOptions(): { locks: RandomLocks; lang: HookLang; min: number; max: number } {
+  const locks = Object.fromEntries(
+    Object.entries(lockIds).map(([k, id]) => [k, $<HTMLInputElement>(id).checked]),
+  ) as unknown as RandomLocks;
+  const lang = $<HTMLSelectElement>('rand-lang').value === 'en' ? 'en' : 'vi';
+  let min = Math.max(3, Number($<HTMLInputElement>('rand-min').value) || 15);
+  let max = Math.max(min + 1, Number($<HTMLInputElement>('rand-max').value) || 40);
+  max = Math.min(max, 600);
+  min = Math.min(min, max - 1);
+  lsSet(LOCKS_KEY, JSON.stringify({ ...locks, lang, min, max }));
+  return { locks, lang, min, max };
+}
+
+/**
+ * Picks a random configuration and, for modes that end on their own, searches for a
+ * seed that ends inside the requested length (trying a few configurations if needed).
+ * The video length is then set to just past that ending.
+ */
+async function makeRandom(status: (text: string) => void): Promise<string> {
+  const { locks, lang, min, max } = randomOptions();
+  let last = randomConfig(cfg, locks, lang);
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    const res = attempt === 1 ? last : randomConfig(cfg, locks, lang);
+    last = res;
+    const next = res.cfg;
+    if (!modeFinishes(next)) {
+      next.duration = Math.round(min + Math.random() * (max - min));
+      next.stopOnFinish = true;
+      await replaceConfig(next);
+      return `${res.summary} · ${next.duration}s`;
+    }
+    status(`🎲 Lần ${attempt}: ${res.summary} — đang tìm seed kết thúc trong ${min}–${max}s…`);
+    const hit = await findSeedInWindow(next, min, max, 80);
+    if (hit) {
+      next.seed = hit.seed;
+      next.stopOnFinish = true;
+      next.duration = Math.min(600, Math.ceil(hit.finishTime + next.endHold + 1));
+      await replaceConfig(next);
+      return `${res.summary} · seed ${hit.seed} · kết thúc ${hit.finishTime.toFixed(1)}s`;
+    }
+  }
+  // Nothing landed in the window: keep the last pick and simply cap its length.
+  last.cfg.duration = max;
+  await replaceConfig(last.cfg);
+  return `${last.summary} · (không tìm được seed kết thúc trong ${min}–${max}s, video dài ${max}s)`;
+}
+
+let randomBusy = false;
+async function randomize(): Promise<void> {
+  if (randomBusy) return;
+  randomBusy = true;
+  $<HTMLButtonElement>('btn-random').disabled = true;
+  const status = $('random-status');
+  try {
+    await preview.ensureAudio();
+    $('audio-hint').hidden = true;
+    const summary = await makeRandom((t) => (status.textContent = t));
+    preview.setPlaying(true);
+    status.textContent = `✅ ${summary}`;
+  } catch (err) {
+    status.textContent = `❌ ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    randomBusy = false;
+    $<HTMLButtonElement>('btn-random').disabled = false;
+  }
+}
+
+$('btn-random').addEventListener('click', () => void randomize());
+
+$('btn-random-batch').addEventListener('click', () =>
+  void exporting(async () => {
+    const n = Math.max(1, Math.min(50, Number($<HTMLInputElement>('random-count').value) || 1));
+    const status = $('random-status');
+    $<HTMLButtonElement>('btn-random').disabled = true;
+    try {
+      for (let i = 0; i < n && !cancelled; i++) {
+        const summary = await makeRandom((t) => (status.textContent = `[${i + 1}/${n}] ${t}`));
+        status.textContent = `[${i + 1}/${n}] ${summary}`;
+        if (!(await runExport({}, `-random${i + 1}`, `[${i + 1}/${n}] `))) break;
+      }
+    } finally {
+      $<HTMLButtonElement>('btn-random').disabled = false;
+    }
+  }),
+);
 
 // ---------------------------------------------------------------- keyboard
 
@@ -488,6 +586,10 @@ document.addEventListener('keydown', (e) => {
       break;
     case ',':
       void preview.seek(preview.time - 1);
+      break;
+    case 'g':
+    case 'G':
+      void randomize();
       break;
     case 'e':
     case 'E':

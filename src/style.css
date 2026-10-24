@@ -160,6 +160,10 @@ button.primary:hover:not(:disabled) { background: var(--accent-2); }
   flex-direction: column;
   gap: 8px;
 }
+.random-card { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.lock-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.lock-row input { width: 16px; height: 16px; accent-color: var(--accent); }
+#rand-min, #rand-max { width: 64px; }
 .export-row, .search-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .batch, .inline { display: inline-flex; gap: 6px; align-items: center; }
 .batch input, .inline input { width: 70px; }
