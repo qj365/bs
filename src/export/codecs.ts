@@ -1,3 +1,5 @@
+import type { Backend } from '../config';
+
 export type MuxVideoCodec = 'avc' | 'hevc' | 'vp9' | 'av1';
 export type MuxAudioCodec = 'aac' | 'opus';
 
@@ -26,10 +28,26 @@ export interface AudioChoice {
   config: AudioEncoderConfig;
 }
 
-/** Picks the best supported video encoder, preferring hardware acceleration (NVENC / QuickSync / AMF). */
-export async function pickVideoCodec(width: number, height: number, fps: number, bitrate: number): Promise<VideoChoice | null> {
+const ACCEL: Record<Backend, HardwareAcceleration[]> = {
+  auto: ['prefer-hardware', 'no-preference'],
+  gpu: ['prefer-hardware'],
+  cpu: ['prefer-software'],
+};
+
+const ACCEL_LABEL: Record<HardwareAcceleration, string> = {
+  'prefer-hardware': ' (GPU)',
+  'prefer-software': ' (CPU)',
+  'no-preference': '',
+};
+
+/**
+ * Picks the best supported video encoder. "auto" prefers hardware encoders
+ * (NVENC / QuickSync / AMF) and falls back to whatever the browser has;
+ * "cpu" forces the software encoder (slower, often better quality per bitrate).
+ */
+export async function pickVideoCodec(width: number, height: number, fps: number, bitrate: number, backend: Backend = 'auto'): Promise<VideoChoice | null> {
   if (typeof VideoEncoder === 'undefined') return null;
-  for (const accel of ['prefer-hardware', 'no-preference'] as const) {
+  for (const accel of ACCEL[backend] ?? ACCEL.auto) {
     for (const c of VIDEO_CANDIDATES) {
       const config: VideoEncoderConfig = {
         codec: c.codec,
@@ -44,7 +62,7 @@ export async function pickVideoCodec(width: number, height: number, fps: number,
       try {
         const res = await VideoEncoder.isConfigSupported(config);
         if (res.supported) {
-          return { mux: c.mux, label: c.label + (accel === 'prefer-hardware' ? ' (GPU)' : ''), config };
+          return { mux: c.mux, label: c.label + ACCEL_LABEL[accel], config };
         }
       } catch {
         // Unknown codec string in this browser — try the next one.

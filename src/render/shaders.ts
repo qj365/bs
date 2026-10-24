@@ -1,5 +1,6 @@
 const COMMON = /* glsl */ `#version 300 es
 precision highp float;
+precision highp int;
 uniform vec2 uWorld;   // world size in sim units
 uniform float uPx;     // pixels per world unit
 vec4 toClip(vec2 p) {
@@ -22,28 +23,39 @@ vec3 ballColor(float hue, float bounces) {
 }
 `;
 
-/** Balls and particles: an instanced quad shaded as an anti-aliased disc with optional glow. */
+/** Balls, particles, gems and power-ups: an instanced quad shaded with an anti-aliased SDF shape. */
 export const CIRCLE_VS = COMMON + COLOR + /* glsl */ `
 layout(location = 0) in vec2 aCorner;
-layout(location = 1) in vec4 aA; // x y r hue
-layout(location = 2) in vec4 aB; // balls: px py bounces team | particles: alpha
-uniform int uKind;               // 0 ball, 1 particle
+layout(location = 1) in vec4 aA; // x y r hue (power-ups: x y r kind)
+layout(location = 2) in vec4 aB; // balls: px py bounces frozen | particles/gems: alpha mult | power-ups: life pulse
+uniform int uKind;               // 0 ball, 1 particle, 2 gem, 3 power-up
 uniform float uExtent;           // quad half-size in radii (bigger when glowing)
 out vec2 vLocal;
 out vec3 vColor;
 out float vAlpha;
 out float vRadiusPx;
+flat out float vFrozen;
+const float POWERUP_HUES[4] = float[4](130.0, 48.0, 205.0, 290.0);
 void main() {
   float r = aA.z;
-  vLocal = aCorner * uExtent;
-  vec2 p = aA.xy + vLocal * r;
+  vFrozen = 0.0;
   if (uKind == 0) {
     vColor = ballColor(aA.w, aB.z);
     vAlpha = 1.0;
-  } else {
+    vFrozen = aB.w;
+  } else if (uKind == 1) {
     vColor = uColorMode == 1 ? uSolid : hsl2rgb(mod(aA.w, 360.0), 0.9, 0.62);
     vAlpha = aB.x;
+  } else if (uKind == 2) {
+    vColor = hsl2rgb(aA.w + aB.y * 25.0, 0.85, 0.72);
+    vAlpha = aB.x;
+  } else {
+    vColor = hsl2rgb(POWERUP_HUES[int(aA.w) & 3], 0.9, 0.58);
+    vAlpha = clamp(aB.x * 4.0, 0.0, 1.0);
+    r *= 1.0 + 0.08 * aB.y;
   }
+  vLocal = aCorner * uExtent;
+  vec2 p = aA.xy + vLocal * r;
   vRadiusPx = r * uPx;
   gl_Position = toClip(p);
 }
@@ -51,19 +63,30 @@ void main() {
 
 export const CIRCLE_FS = /* glsl */ `#version 300 es
 precision highp float;
+precision highp int;
 in vec2 vLocal;
 in vec3 vColor;
 in float vAlpha;
 in float vRadiusPx;
+flat in float vFrozen;
+uniform int uKind;
 uniform float uGlow;     // 0..1
 uniform float uOutline;  // 0/1
 out vec4 o;
 void main() {
-  float d = length(vLocal);
   float aa = 1.0 / max(vRadiusPx, 0.5);
+  float d = uKind == 2 ? (abs(vLocal.x) + abs(vLocal.y)) * 0.85 : length(vLocal);
   float core = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, d);
   vec3 col = vColor;
-  if (uOutline > 0.5) {
+  if (uKind == 3) {
+    // Power-up: a bright ring with a soft fill; the icon comes from the text layer.
+    float band = 1.0 - smoothstep(0.12 - aa, 0.12 + aa, abs(d - 0.86));
+    core = max(band, core * 0.28);
+  } else if (uKind == 2) {
+    float facet = step(0.0, vLocal.x * vLocal.y);
+    col = mix(col, vec3(1.0), 0.25 * facet + 0.5 * smoothstep(0.75, 1.0, d));
+  }
+  if (uOutline > 0.5 || vFrozen > 0.5) {
     float ring = smoothstep(0.78 - aa, 0.78 + aa, d);
     col = mix(col, vec3(1.0), ring * 0.85);
   }
@@ -104,6 +127,7 @@ void main() {
 
 export const SEGMENT_FS = /* glsl */ `#version 300 es
 precision highp float;
+precision highp int;
 uniform float uPx;
 in vec2 vWorldPos;
 flat in vec4 vSeg;
@@ -122,27 +146,31 @@ void main() {
 }
 `;
 
-/** Rotating rings with a gap and round end caps, matching the physics exactly. */
+/** Rotating rings with a gap and round end caps (matching the physics), spikes and glass. */
 export const RING_VS = COMMON + /* glsl */ `
 layout(location = 0) in vec2 aCorner;
 layout(location = 1) in vec4 aA; // cx cy r thickness
 layout(location = 2) in vec4 aB; // rot gap hue flash
+layout(location = 3) in vec4 aC; // spikeCenter spikeArc glassFrac spikeSize
 uniform float uGlow;
 out vec2 vWorldPos;
 flat out vec4 vA;
 flat out vec4 vB;
+flat out vec4 vC;
 void main() {
   float ext = aA.z + aA.w * (0.5 + 2.5 * uGlow) + 2.0 / uPx;
   vec2 p = aA.xy + aCorner * ext;
   vWorldPos = p;
   vA = aA;
   vB = aB;
+  vC = aC;
   gl_Position = toClip(p);
 }
 `;
 
 export const RING_FS = /* glsl */ `#version 300 es
 precision highp float;
+precision highp int;
 uniform float uPx;
 uniform float uGlow;
 uniform float uTime;
@@ -151,33 +179,74 @@ uniform vec3 uRingColor;
 in vec2 vWorldPos;
 flat in vec4 vA;
 flat in vec4 vB;
+flat in vec4 vC;
 out vec4 o;
 vec3 hsl2rgb(float h, float s, float l) {
   vec3 k = clamp(abs(mod(h / 60.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
   return l + s * (k - 0.5) * (1.0 - abs(2.0 * l - 1.0));
 }
+float hash(float n) { return fract(sin(n * 127.1) * 43758.5453); }
 const float PI = 3.14159265359;
+float wrapAngle(float a) { return mod(a + PI, 2.0 * PI) - PI; }
 void main() {
   vec2 p = vWorldPos - vA.xy;
   float R = vA.z, th = vA.w * 0.5;
   float rot = vB.x, gap = vB.y;
   float ang = atan(p.y, p.x);
-  float rel = mod(ang - rot + PI, 2.0 * PI) - PI;
+  float len = length(p);
+  float rel = wrapAngle(ang - rot);
   float sd;
   if (gap > 0.0 && abs(rel) < gap * 0.5) {
     vec2 c1 = vec2(cos(rot + gap * 0.5), sin(rot + gap * 0.5)) * R;
     vec2 c2 = vec2(cos(rot - gap * 0.5), sin(rot - gap * 0.5)) * R;
     sd = min(length(p - c1), length(p - c2)) - th;
   } else {
-    sd = abs(length(p) - R) - th;
+    sd = abs(len - R) - th;
   }
+  vec3 col = uRainbow == 1 ? hsl2rgb(mod(vB.z + uTime * 40.0, 360.0), 0.9, 0.6) : uRingColor;
+  float alphaMul = 1.0;
+
+  // Glass: translucent with a bright rim and cracks that multiply as it takes hits.
+  float glass = vC.z;
+  if (glass >= 0.0) {
+    float rim = 1.0 - smoothstep(0.0, th * 0.6, abs(abs(len - R) - th * 0.7));
+    col = mix(col * 0.7 + 0.3, vec3(1.0), rim * 0.6);
+    alphaMul = 0.55 + rim * 0.35;
+    float cracks = floor((1.0 - glass) * 28.0);
+    for (int k = 0; k < 28; k++) {
+      if (float(k) >= cracks) break;
+      float a = hash(float(k) + 1.0) * 2.0 * PI;
+      float wobble = (hash(float(k) + 7.0) - 0.5) * 0.04 * (len - R) / max(th, 1.0);
+      float dist = abs(wrapAngle(ang - a - wobble)) * len * uPx;
+      if (dist < 1.2) { col = vec3(1.0); alphaMul = 1.0; }
+    }
+  }
+
   float sdPx = sd * uPx;
   float core = 1.0 - smoothstep(-0.75, 0.75, sdPx);
+
+  // Spikes: triangular teeth pointing inward over the spike arc.
+  float spikes = 0.0;
+  if (vC.y > 0.0) {
+    float sr = wrapAngle(ang - vC.x);
+    if (abs(sr) < vC.y * 0.5) {
+      float inner = R - th;
+      float depth = inner - len;
+      float u = (sr + vC.y * 0.5) * inner / vC.w;
+      float f = fract(u);
+      float tooth = vC.w * (1.0 - abs(2.0 * f - 1.0));
+      float sdTooth = max(depth - tooth, -depth) * uPx;
+      spikes = 1.0 - smoothstep(-0.75, 0.75, sdTooth);
+    }
+  }
+
   float glow = uGlow * 0.45 * exp(-max(sd, 0.0) / max(th * 2.0, 2.0)) * (1.0 - core);
-  vec3 col = uRainbow == 1 ? hsl2rgb(mod(vB.z + uTime * 40.0, 360.0), 0.9, 0.6) : uRingColor;
   col = mix(col, vec3(1.0), vB.w * 0.7);
-  float a = core + glow;
-  o = vec4(col * a, a);
+  vec3 spikeCol = mix(vec3(1.0, 0.25, 0.35), vec3(1.0), vB.w * 0.5);
+  float a = (core + glow) * alphaMul;
+  vec3 outc = col * a;
+  float sa = spikes;
+  o = vec4(outc * (1.0 - sa) + spikeCol * sa, a * (1.0 - sa) + sa);
 }
 `;
 
@@ -195,6 +264,7 @@ void main() {
 
 export const QUAD_FS = /* glsl */ `#version 300 es
 precision highp float;
+precision highp int;
 in vec2 vUv;
 uniform sampler2D uTex;
 out vec4 o;

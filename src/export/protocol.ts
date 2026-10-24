@@ -7,7 +7,7 @@ export type WorkerIn =
   | { type: 'no-audio' };
 
 export type WorkerOut =
-  | { type: 'codecs'; video: string; audio: string }
+  | { type: 'codecs'; video: string; audio: string; renderer: 'gpu' | 'cpu' }
   | { type: 'progress'; frame: number; total: number; fps: number }
   | { type: 'status'; text: string }
   | { type: 'need-audio'; events: SimEvent[]; duration: number }

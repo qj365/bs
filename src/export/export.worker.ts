@@ -1,6 +1,7 @@
 import { ArrayBufferTarget, Muxer } from 'mp4-muxer';
 import type { Config } from '../config';
-import { Renderer } from '../render/renderer';
+import { createRenderer, type FrameRenderer } from '../render';
+import { GpuRenderer } from '../render/renderer';
 import { Simulation, counterValue, endMessage, type SimEvent } from '../sim';
 import { pickAudioCodec, pickVideoCodec } from './codecs';
 import type { WorkerIn, WorkerOut } from './protocol';
@@ -32,10 +33,15 @@ async function run(cfg: Config): Promise<void> {
   const sim = await Simulation.create(cfg);
   const { width, height } = sim.layout;
   const fps = cfg.fps;
-  const video = await pickVideoCodec(width, height, fps, Math.round(cfg.bitrate * 1_000_000));
-  if (!video) throw new Error('Trình duyệt không có bộ mã hóa video phù hợp (cần Chrome/Edge bản mới).');
+  const video = await pickVideoCodec(width, height, fps, Math.round(cfg.bitrate * 1_000_000), cfg.encoder);
+  if (!video) {
+    throw new Error(cfg.encoder === 'auto'
+      ? 'Trình duyệt không có bộ mã hóa video phù hợp (cần Chrome/Edge bản mới).'
+      : `Không có bộ mã hóa ${cfg.encoder.toUpperCase()} cho cấu hình này — thử chọn "Tự động".`);
+  }
   const audio = cfg.sound ? await pickAudioCodec(SAMPLE_RATE) : null;
-  post({ type: 'codecs', video: video.label, audio: audio?.label ?? 'không' });
+  const renderer = createRenderer(cfg.renderer, () => new OffscreenCanvas(width, height), sim.layout);
+  post({ type: 'codecs', video: video.label, audio: audio?.label ?? 'không', renderer: renderer.kind });
 
   const target = new ArrayBufferTarget();
   const muxer = new Muxer({
@@ -53,8 +59,6 @@ async function run(cfg: Config): Promise<void> {
   });
   encoder.configure(video.config);
 
-  const canvas = new OffscreenCanvas(width, height);
-  const renderer = new Renderer(canvas, sim.layout);
 
   captureMode = null;
   const events: SimEvent[] = [];
@@ -73,9 +77,11 @@ async function run(cfg: Config): Promise<void> {
     if (cfg.stopOnFinish && st.finished && t > st.finishTime + cfg.endHold) break;
 
     const data = sim.renderData(cfg.trailLength);
-    renderer.render(cfg, data, { counter: counterValue(cfg, st), time: t, end: endMessage(cfg, st) });
+    renderer.render(cfg, data, {
+      counter: counterValue(cfg, st), time: t, end: endMessage(cfg, st), powerups: data.powerups, powerupCount: data.powerupCount,
+    });
 
-    const frame = capture(canvas, renderer.gl, Math.round(i * frameUs), Math.round(frameUs));
+    const frame = capture(renderer, Math.round(i * frameUs), Math.round(frameUs));
     encoder.encode(frame, { keyFrame: i % keyEvery === 0 });
     frame.close();
     frames = i + 1;
@@ -107,7 +113,7 @@ async function run(cfg: Config): Promise<void> {
   muxer.finalize();
   const buffer = target.buffer;
   const elapsed = (performance.now() - t0) / 1000;
-  post({ type: 'done', buffer, frames, seconds: elapsed, duration, video: `${video.label} · ${captureMode}`, audio: audio?.label ?? '' }, [buffer]);
+  post({ type: 'done', buffer, frames, seconds: elapsed, duration, video: `${video.label} · vẽ ${renderer.kind.toUpperCase()}`, audio: audio?.label ?? '' }, [buffer]);
 }
 
 type CaptureMode = 'canvas' | 'bitmap' | 'pixels';
@@ -119,12 +125,12 @@ let pixels: Uint8Array | null = null;
  * when the GPU driver allows it; readPixels is the slower universal fallback.
  * The first method that works is remembered for the rest of the export.
  */
-function capture(canvas: OffscreenCanvas, gl: WebGL2RenderingContext, timestamp: number, duration: number): VideoFrame {
+function capture(renderer: FrameRenderer, timestamp: number, duration: number): VideoFrame {
   const order: CaptureMode[] = captureMode ? [captureMode] : ['canvas', 'bitmap', 'pixels'];
   let lastErr: unknown = null;
   for (const mode of order) {
     try {
-      const frame = captureWith(mode, canvas, gl, timestamp, duration);
+      const frame = captureWith(mode, renderer, timestamp, duration);
       captureMode = mode;
       return frame;
     } catch (err) {
@@ -134,7 +140,8 @@ function capture(canvas: OffscreenCanvas, gl: WebGL2RenderingContext, timestamp:
   throw lastErr;
 }
 
-function captureWith(mode: CaptureMode, canvas: OffscreenCanvas, gl: WebGL2RenderingContext, timestamp: number, duration: number): VideoFrame {
+function captureWith(mode: CaptureMode, renderer: FrameRenderer, timestamp: number, duration: number): VideoFrame {
+  const canvas = renderer.canvas as OffscreenCanvas;
   if (mode === 'canvas') return new VideoFrame(canvas, { timestamp, duration });
   if (mode === 'bitmap') {
     const bitmap = canvas.transferToImageBitmap();
@@ -145,18 +152,23 @@ function captureWith(mode: CaptureMode, canvas: OffscreenCanvas, gl: WebGL2Rende
     }
   }
   const { width, height } = canvas;
-  const rowBytes = width * 4;
-  pixels ??= new Uint8Array(rowBytes * height);
-  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-  // readPixels returns rows bottom-up; flip in place.
-  const tmp = new Uint8Array(rowBytes);
-  for (let top = 0, bottom = height - 1; top < bottom; top++, bottom--) {
-    const a = top * rowBytes, b = bottom * rowBytes;
-    tmp.set(pixels.subarray(a, a + rowBytes));
-    pixels.copyWithin(a, b, b + rowBytes);
-    pixels.set(tmp, b);
+  if (renderer instanceof GpuRenderer) {
+    const gl = renderer.gl;
+    const rowBytes = width * 4;
+    pixels ??= new Uint8Array(rowBytes * height);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    // readPixels returns rows bottom-up; flip in place.
+    const tmp = new Uint8Array(rowBytes);
+    for (let top = 0, bottom = height - 1; top < bottom; top++, bottom--) {
+      const a = top * rowBytes, b = bottom * rowBytes;
+      tmp.set(pixels.subarray(a, a + rowBytes));
+      pixels.copyWithin(a, b, b + rowBytes);
+      pixels.set(tmp, b);
+    }
+    return new VideoFrame(pixels, { format: 'RGBX', codedWidth: width, codedHeight: height, timestamp, duration });
   }
-  return new VideoFrame(pixels, { format: 'RGBX', codedWidth: width, codedHeight: height, timestamp, duration });
+  const img = (canvas.getContext('2d') as OffscreenCanvasRenderingContext2D).getImageData(0, 0, width, height);
+  return new VideoFrame(img.data, { format: 'RGBX', codedWidth: width, codedHeight: height, timestamp, duration });
 }
 
 async function encodeAudio(

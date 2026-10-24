@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust (wasm32)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - run: npm ci
+
+      - name: Rebuild WASM and check it matches the committed file
+        run: |
+          npm run build:wasm
+          git diff --exit-code --stat src/wasm/ball_sim.wasm || echo "::warning::src/wasm/ball_sim.wasm differs from a fresh build — run npm run build:wasm and commit it"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (simulation)
+        run: npm test
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results

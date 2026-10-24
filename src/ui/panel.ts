@@ -3,23 +3,36 @@ import { GROUPS, type Field } from './schema';
 
 export interface PanelHandlers {
   onChange(key: keyof Config, live: boolean): void;
-  onMidi(file: File): void;
+  onAction(name: string): void;
+  /** Extra text shown next to an action button (e.g. the loaded file name). */
+  actionInfo(name: string): string;
+}
+
+interface Row {
+  field: Field;
+  row: HTMLElement;
+  group: HTMLDetailsElement;
+  sync: () => void;
 }
 
 /** Builds the settings panel from the schema and keeps inputs in sync with the config object. */
 export class Panel {
-  private rows: { field: Field; row: HTMLElement; sync: () => void }[] = [];
+  private rows: Row[] = [];
+  private groups: HTMLDetailsElement[] = [];
+  private filter = '';
 
   constructor(root: HTMLElement, private cfg: Config, private h: PanelHandlers) {
     for (const group of GROUPS) {
       const details = document.createElement('details');
       details.className = 'group';
+      details.dataset.group = group.id;
       details.open = !!group.open;
       const summary = document.createElement('summary');
       summary.textContent = group.title;
       details.append(summary);
-      for (const field of group.fields) details.append(this.buildRow(field));
+      for (const field of group.fields) details.append(this.buildRow(field, details));
       root.append(details);
+      this.groups.push(details);
     }
     this.refresh();
   }
@@ -29,21 +42,38 @@ export class Panel {
     this.refresh();
   }
 
+  /** Filters rows by label text; matching groups open automatically. */
+  setFilter(text: string): void {
+    this.filter = text.trim().toLowerCase();
+    this.refresh();
+  }
+
   /** Re-reads every value from the config and shows only the fields relevant to the current mode. */
   refresh(): void {
     for (const r of this.rows) {
       r.sync();
-      r.row.hidden = !!r.field.modes && !r.field.modes.includes(this.cfg.mode as Mode);
+      const forMode = !r.field.modes || r.field.modes.includes(this.cfg.mode as Mode);
+      const matches = !this.filter || r.field.label.toLowerCase().includes(this.filter);
+      r.row.hidden = !forMode || !matches;
+    }
+    for (const g of this.groups) {
+      const visible = this.rows.some((r) => r.group === g && !r.row.hidden);
+      g.hidden = !visible;
+      if (this.filter && visible) g.open = true;
     }
   }
 
-  private buildRow(field: Field): HTMLElement {
+  private buildRow(field: Field, group: HTMLDetailsElement): HTMLElement {
     const row = document.createElement('label');
     row.className = `row row-${field.type}`;
+    row.dataset.key = field.key;
     const title = document.createElement('span');
     title.className = 'label';
     title.textContent = field.label;
-    if (field.hint) title.title = field.hint;
+    if (field.hint) {
+      title.title = field.hint;
+      title.classList.add('has-hint');
+    }
     const cfg = () => this.cfg as unknown as Record<string, unknown>;
     const key = field.key as keyof Config;
     const commit = (value: unknown) => {
@@ -59,10 +89,12 @@ export class Panel {
         input.min = String(field.min);
         input.max = String(field.max);
         input.step = String(field.step ?? 1);
+        input.setAttribute('aria-label', field.label);
         const num = document.createElement('input');
         num.type = 'number';
         num.className = 'num';
         num.step = String(field.step ?? 1);
+        num.setAttribute('aria-label', field.label);
         input.addEventListener('input', () => {
           num.value = input.value;
           commit(Number(input.value));
@@ -135,26 +167,24 @@ export class Panel {
         row.append(title, input);
         break;
       }
-      case 'midi': {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.mid,.midi,audio/midi';
+      case 'action': {
+        const name = field.key.slice('action:'.length);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = field.label;
+        btn.dataset.action = name;
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          this.h.onAction(name);
+        });
         const info = document.createElement('span');
         info.className = 'hint';
-        input.addEventListener('change', () => {
-          const f = input.files?.[0];
-          if (f) this.h.onMidi(f);
-          input.value = '';
-        });
-        sync = () => {
-          const n = this.cfg.melody.length;
-          info.textContent = n > 0 ? `Đã nạp ${n} nốt/hợp âm` : 'Chưa có file';
-        };
-        row.append(title, input, info);
+        sync = () => (info.textContent = this.h.actionInfo(name));
+        row.append(btn, info);
         break;
       }
     }
-    this.rows.push({ field, row, sync });
+    this.rows.push({ field, row, group, sync });
     return row;
   }
 }

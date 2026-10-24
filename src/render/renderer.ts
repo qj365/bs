@@ -1,11 +1,12 @@
 import type { Config } from '../config';
-import { BALL_STRIDE, PARTICLE_STRIDE, RING_STRIDE, TRAIL_STRIDE, type Layout, type RenderData } from '../sim';
+import {
+  BALL_STRIDE, GEM_STRIDE, PARTICLE_STRIDE, POWERUP_STRIDE, RING_STRIDE, SEG_STRIDE, type Layout, type RenderData,
+} from '../sim';
 import { Hud, type HudState } from './hud';
 import {
   CIRCLE_FS, CIRCLE_VS, QUAD_FS, QUAD_VS, RING_FS, RING_VS, SEGMENT_FS, SEGMENT_VS,
 } from './shaders';
-
-type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
+import { hexToRgb, isDark, wallColor, type AnyCanvas, type FrameRenderer } from './types';
 
 interface Program {
   prog: WebGLProgram;
@@ -32,37 +33,24 @@ class InstanceBuffer {
   }
 }
 
-function hexToRgb(hex: string): [number, number, number] {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  const n = m ? parseInt(m[1], 16) : 0xffffff;
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-}
-
 const COLOR_MODES = { rainbow: 0, solid: 1, cycle: 2 } as const;
+const KIND = { ball: 0, particle: 1, gem: 2, powerup: 3 } as const;
 
 /**
  * WebGL2 renderer. Every kind of object is drawn with a single instanced draw
  * call that reads the simulation's output buffers directly (they are views into
  * WASM memory), so the per-frame cost barely grows with the number of balls.
  */
-export class Renderer {
+export class GpuRenderer implements FrameRenderer {
+  readonly kind = 'gpu' as const;
   readonly gl: WebGL2RenderingContext;
   private circle: Program;
   private segment: Program;
   private ring: Program;
   private quad: Program;
   private quadVbo: WebGLBuffer;
-  private vaoCircle: WebGLVertexArrayObject;
-  private vaoParticle: WebGLVertexArrayObject;
-  private vaoSegment: WebGLVertexArrayObject;
-  private vaoPaint: WebGLVertexArrayObject;
-  private vaoRing: WebGLVertexArrayObject;
-  private vaoQuad: WebGLVertexArrayObject;
-  private ballBuf: InstanceBuffer;
-  private particleBuf: InstanceBuffer;
-  private trailBuf: InstanceBuffer;
-  private paintBuf: InstanceBuffer;
-  private ringBuf: InstanceBuffer;
+  private vao: Record<'ball' | 'particle' | 'gem' | 'powerup' | 'trail' | 'paint' | 'wall' | 'line' | 'ring' | 'quad', WebGLVertexArrayObject>;
+  private bufs: Record<'ball' | 'particle' | 'gem' | 'powerup' | 'trail' | 'paint' | 'wall' | 'line' | 'ring', InstanceBuffer>;
   private paintTex: WebGLTexture;
   private paintFbo: WebGLFramebuffer;
   private paintScratch = new Float32Array(0);
@@ -79,6 +67,7 @@ export class Renderer {
       premultipliedAlpha: true,
       preserveDrawingBuffer: false,
       powerPreference: 'high-performance',
+      failIfMajorPerformanceCaveat: false,
     }) as WebGL2RenderingContext | null;
     if (!gl) throw new Error('Trình duyệt không hỗ trợ WebGL2.');
     this.gl = gl;
@@ -92,19 +81,24 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadVbo);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
 
-    this.ballBuf = new InstanceBuffer(gl);
-    this.particleBuf = new InstanceBuffer(gl);
-    this.trailBuf = new InstanceBuffer(gl);
-    this.paintBuf = new InstanceBuffer(gl);
-    this.ringBuf = new InstanceBuffer(gl);
-
-    this.vaoCircle = this.instancedVao(this.ballBuf, BALL_STRIDE, 4, 4);
-    this.vaoParticle = this.instancedVao(this.particleBuf, PARTICLE_STRIDE, 4, 2);
-    this.vaoSegment = this.instancedVao(this.trailBuf, TRAIL_STRIDE, 4, 4);
-    this.vaoPaint = this.instancedVao(this.paintBuf, TRAIL_STRIDE, 4, 4);
-    this.vaoRing = this.instancedVao(this.ringBuf, RING_STRIDE, 4, 4);
-    this.vaoQuad = gl.createVertexArray()!;
-    gl.bindVertexArray(this.vaoQuad);
+    const buf = () => new InstanceBuffer(gl);
+    this.bufs = {
+      ball: buf(), particle: buf(), gem: buf(), powerup: buf(), trail: buf(), paint: buf(), wall: buf(), line: buf(), ring: buf(),
+    };
+    const b = this.bufs;
+    this.vao = {
+      ball: this.instancedVao(b.ball, BALL_STRIDE, [4, 4]),
+      particle: this.instancedVao(b.particle, PARTICLE_STRIDE, [4, 2]),
+      gem: this.instancedVao(b.gem, GEM_STRIDE, [4, 2]),
+      powerup: this.instancedVao(b.powerup, POWERUP_STRIDE, [4, 2]),
+      trail: this.instancedVao(b.trail, SEG_STRIDE, [4, 4]),
+      paint: this.instancedVao(b.paint, SEG_STRIDE, [4, 4]),
+      wall: this.instancedVao(b.wall, SEG_STRIDE, [4, 4]),
+      line: this.instancedVao(b.line, SEG_STRIDE, [4, 4]),
+      ring: this.instancedVao(b.ring, RING_STRIDE, [4, 4, 4]),
+      quad: gl.createVertexArray()!,
+    };
+    gl.bindVertexArray(this.vao.quad);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadVbo);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
@@ -144,8 +138,8 @@ export class Renderer {
     return { prog, u };
   }
 
-  /** VAO with the unit quad at location 0 and two per-instance vec4-ish attributes at 1 and 2. */
-  private instancedVao(buf: InstanceBuffer, stride: number, sizeA: number, sizeB: number): WebGLVertexArrayObject {
+  /** VAO with the unit quad at location 0 and per-instance attributes of the given sizes at 1, 2, … */
+  private instancedVao(buf: InstanceBuffer, stride: number, sizes: number[]): WebGLVertexArrayObject {
     const gl = this.gl;
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
@@ -153,12 +147,13 @@ export class Renderer {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, buf.buf);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, sizeA, gl.FLOAT, false, stride * 4, 0);
-    gl.vertexAttribDivisor(1, 1);
-    gl.enableVertexAttribArray(2);
-    gl.vertexAttribPointer(2, sizeB, gl.FLOAT, false, stride * 4, sizeA * 4);
-    gl.vertexAttribDivisor(2, 1);
+    let offset = 0;
+    sizes.forEach((size, i) => {
+      gl.enableVertexAttribArray(i + 1);
+      gl.vertexAttribPointer(i + 1, size, gl.FLOAT, false, stride * 4, offset * 4);
+      gl.vertexAttribDivisor(i + 1, 1);
+      offset += size;
+    });
     gl.bindVertexArray(null);
     return vao;
   }
@@ -175,7 +170,6 @@ export class Renderer {
     return tex;
   }
 
-  /** Clears the persistent paint layer (call when the simulation restarts). */
   resetPaint(): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.paintFbo);
@@ -194,31 +188,59 @@ export class Renderer {
     if (p.u.uSolid) gl.uniform3f(p.u.uSolid, ...hexToRgb(cfg.ballColor));
   }
 
+  private drawSegments(cfg: Config, vao: WebGLVertexArrayObject, buf: InstanceBuffer, data: Float32Array, count: number, solid?: [number, number, number]): void {
+    if (count === 0) return;
+    const gl = this.gl;
+    buf.upload(data);
+    this.setCommon(this.segment, cfg);
+    if (solid) {
+      gl.uniform1i(this.segment.u.uColorMode, 1);
+      gl.uniform3f(this.segment.u.uSolid, ...solid);
+    }
+    gl.bindVertexArray(vao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
+  }
+
+  private drawCircles(cfg: Config, kind: number, vao: WebGLVertexArrayObject, buf: InstanceBuffer, data: Float32Array, count: number, extent: number, glow: boolean, outline: boolean): void {
+    if (count === 0) return;
+    const gl = this.gl;
+    buf.upload(data);
+    const p = this.circle;
+    this.setCommon(p, cfg);
+    gl.uniform1i(p.u.uKind, kind);
+    gl.uniform1f(p.u.uExtent, extent);
+    gl.uniform1f(p.u.uGlow, glow ? 1 : 0);
+    gl.uniform1f(p.u.uOutline, outline ? 1 : 0);
+    gl.bindVertexArray(vao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
+  }
+
+  paintOnly(cfg: Config, data: RenderData): void {
+    if (!cfg.paintTrail || data.ballCount === 0) return;
+    const gl = this.gl;
+    const n = data.ballCount;
+    if (this.paintScratch.length < n * SEG_STRIDE) this.paintScratch = new Float32Array(n * SEG_STRIDE * 2);
+    const src = data.balls;
+    const dst = this.paintScratch;
+    for (let i = 0; i < n; i++) {
+      const s = i * BALL_STRIDE, d = i * SEG_STRIDE;
+      dst[d] = src[s + 4]; dst[d + 1] = src[s + 5]; // previous position
+      dst[d + 2] = src[s]; dst[d + 3] = src[s + 1]; // current position
+      dst[d + 4] = src[s + 2]; dst[d + 5] = src[s + 3]; // radius, hue
+      dst[d + 6] = 1; dst[d + 7] = src[s + 6]; // alpha, bounces
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.paintFbo);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    this.drawSegments(cfg, this.vao.paint, this.bufs.paint, dst.subarray(0, n * SEG_STRIDE), n);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
   render(cfg: Config, data: RenderData, hud: HudState): void {
     const gl = this.gl;
     const { width, height } = this.canvas;
 
     // 1. Persistent paint: stroke each ball from where it was last frame to where it is now.
-    if (cfg.paintTrail && data.ballCount > 0) {
-      const n = data.ballCount;
-      if (this.paintScratch.length < n * TRAIL_STRIDE) this.paintScratch = new Float32Array(n * TRAIL_STRIDE * 2);
-      const src = data.balls;
-      const dst = this.paintScratch;
-      for (let i = 0; i < n; i++) {
-        const s = i * BALL_STRIDE, d = i * TRAIL_STRIDE;
-        dst[d] = src[s + 4]; dst[d + 1] = src[s + 5]; // previous position
-        dst[d + 2] = src[s]; dst[d + 3] = src[s + 1]; // current position
-        dst[d + 4] = src[s + 2]; dst[d + 5] = src[s + 3]; // radius, hue
-        dst[d + 6] = 1; dst[d + 7] = src[s + 6]; // alpha, bounces
-      }
-      this.paintBuf.upload(dst.subarray(0, n * TRAIL_STRIDE));
-      gl.bindFramebuffer(gl.FRAMEBUFFER, this.paintFbo);
-      gl.viewport(0, 0, width, height);
-      this.setCommon(this.segment, cfg);
-      gl.bindVertexArray(this.vaoPaint);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    }
+    this.paintOnly(cfg, data);
 
     gl.viewport(0, 0, width, height);
     const [br, bg, bb] = hexToRgb(cfg.bgColor);
@@ -228,58 +250,38 @@ export class Renderer {
     // The paint texture was rendered with clip-space y up, so it samples without flipping.
     if (cfg.paintTrail) this.drawTexture(this.paintTex, false);
 
-    // 2. Motion trails. On dark backgrounds MAX blending stops overlapping segments
-    //    from stacking up into visible beads; on light ones it would hide them.
+    // 2. Impact lines, then motion trails. On dark backgrounds MAX blending stops
+    //    overlapping trail segments from stacking up into visible beads.
+    this.drawSegments(cfg, this.vao.line, this.bufs.line, data.lines, data.lineCount);
     if (data.trailCount > 0) {
-      this.trailBuf.upload(data.trails);
-      this.setCommon(this.segment, cfg);
-      const dark = 0.2126 * br + 0.7152 * bg + 0.0722 * bb < 0.5;
-      if (dark) gl.blendEquation(gl.MAX);
-      gl.bindVertexArray(this.vaoSegment);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, data.trailCount);
+      if (isDark(cfg.bgColor)) gl.blendEquation(gl.MAX);
+      this.drawSegments(cfg, this.vao.trail, this.bufs.trail, data.trails, data.trailCount);
       gl.blendEquation(gl.FUNC_ADD);
     }
 
-    // 3. Rings.
+    // 3. Arena: spiral walls and rings.
+    this.drawSegments(cfg, this.vao.wall, this.bufs.wall, data.walls, data.wallCount, wallColor(cfg, hud.time));
     if (data.ringCount > 0) {
-      this.ringBuf.upload(data.rings);
+      this.bufs.ring.upload(data.rings);
       const p = this.ring;
       this.setCommon(p, cfg);
       gl.uniform1f(p.u.uGlow, cfg.glow ? 1 : 0);
       gl.uniform1f(p.u.uTime, hud.time);
       gl.uniform1i(p.u.uRainbow, cfg.ringRainbow ? 1 : 0);
       gl.uniform3f(p.u.uRingColor, ...hexToRgb(cfg.ringColor));
-      gl.bindVertexArray(this.vaoRing);
+      gl.bindVertexArray(this.vao.ring);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, data.ringCount);
     }
 
-    // 4. Particles.
-    if (cfg.particles && data.particleCount > 0) {
-      this.particleBuf.upload(data.particles);
-      const p = this.circle;
-      this.setCommon(p, cfg);
-      gl.uniform1i(p.u.uKind, 1);
-      gl.uniform1f(p.u.uExtent, 1.2);
-      gl.uniform1f(p.u.uGlow, 0);
-      gl.uniform1f(p.u.uOutline, 0);
-      gl.bindVertexArray(this.vaoParticle);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, data.particleCount);
+    // 4. Gems, power-ups, particles, balls.
+    this.drawCircles(cfg, KIND.gem, this.vao.gem, this.bufs.gem, data.gems, data.gemCount, 1.25, cfg.glow, false);
+    this.drawCircles(cfg, KIND.powerup, this.vao.powerup, this.bufs.powerup, data.powerups, data.powerupCount, 1.3, false, false);
+    if (cfg.particles) {
+      this.drawCircles(cfg, KIND.particle, this.vao.particle, this.bufs.particle, data.particles, data.particleCount, 1.2, false, false);
     }
+    this.drawCircles(cfg, KIND.ball, this.vao.ball, this.bufs.ball, data.balls, data.ballCount, cfg.glow ? 2.2 : 1.1, cfg.glow, cfg.ballOutline);
 
-    // 5. Balls.
-    if (data.ballCount > 0) {
-      this.ballBuf.upload(data.balls);
-      const p = this.circle;
-      this.setCommon(p, cfg);
-      gl.uniform1i(p.u.uKind, 0);
-      gl.uniform1f(p.u.uExtent, cfg.glow ? 2.2 : 1.1);
-      gl.uniform1f(p.u.uGlow, cfg.glow ? 1 : 0);
-      gl.uniform1f(p.u.uOutline, cfg.ballOutline ? 1 : 0);
-      gl.bindVertexArray(this.vaoCircle);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, data.ballCount);
-    }
-
-    // 6. Text overlay — re-uploaded only when its content changed.
+    // 5. Text overlay — re-uploaded only when its content changed.
     this.hud.update(cfg, this.layout, hud);
     if (!this.hud.empty) {
       if (this.hud.version !== this.hudVersion) {
@@ -301,7 +303,7 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.uniform1i(this.quad.u.uTex, 0);
     gl.uniform1i(this.quad.u.uFlipY, flipY ? 1 : 0);
-    gl.bindVertexArray(this.vaoQuad);
+    gl.bindVertexArray(this.vao.quad);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 

@@ -39,7 +39,7 @@ export function startExport(cfg: Config, onProgress: (p: ExportProgress) => void
       const m = ev.data;
       switch (m.type) {
         case 'codecs':
-          codecs = `${m.video} + ${m.audio}`;
+          codecs = `vẽ ${m.renderer.toUpperCase()} · ${m.video} + ${m.audio}`;
           onProgress({ frame: 0, total: 1, fps: 0, status: `Bộ mã hóa: ${codecs}` });
           break;
         case 'progress':

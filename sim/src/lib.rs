@@ -13,11 +13,14 @@ const HZ: f64 = 240.0;
 const DT: f64 = 1.0 / HZ;
 const TRAIL_EVERY: u64 = 4; // 60 trail samples per second
 const MAX_TRAIL: usize = 64;
-const MAX_LEVEL: u32 = 11;
+const MAX_CONTACTS: usize = 64;
 const MAX_TEAMS: usize = 16;
+const MERGE_GOAL: u32 = 10;
 const MIN_SOUND_SPEED: f64 = 60.0;
+const MAX_POWERUPS: usize = 3;
+const POWERUP_LIFE: f64 = 8.0;
 
-// Parameter slots shared with src/sim.ts (PARAM_* constants there must match).
+// Parameter slots shared with src/sim.ts (the `P` table there must match).
 const P_MODE: usize = 0;
 const P_SEED: usize = 1;
 const P_W: usize = 2;
@@ -44,8 +47,20 @@ const P_SPEED_BOOST: usize = 22;
 const P_INITIAL_SPEED: usize = 23;
 const P_MAX_SPEED: usize = 24;
 const P_BALL_COLLISIONS: usize = 25;
-const P_TEAM_COUNT: usize = 26;
-const P_TEAM_HUES: usize = 27; // MAX_TEAMS slots
+const P_SPIKE_ARC: usize = 26;
+const P_SPIKE_EFFECT: usize = 27;
+const P_SPIKE_SIZE: usize = 28;
+const P_RING_HP: usize = 29;
+const P_POWERUPS: usize = 30;
+const P_POWERUP_INTERVAL: usize = 31;
+const P_IMPACT_LINES: usize = 32;
+const P_EXPLODE_COUNT: usize = 33;
+const P_SPIRAL_TURNS: usize = 34;
+const P_SPIRAL_SPEED: usize = 35;
+const P_GEM_COUNT: usize = 36;
+const P_IMPACT_MODE: usize = 37;
+const P_TEAM_COUNT: usize = 38;
+const P_TEAM_HUES: usize = 39; // MAX_TEAMS slots
 const PARAM_COUNT: usize = P_TEAM_HUES + MAX_TEAMS;
 
 // Event kinds (mirrored in src/sim.ts).
@@ -55,12 +70,18 @@ const EV_ESCAPE: f32 = 2.0;
 const EV_BREAK: f32 = 3.0;
 const EV_MERGE: f32 = 4.0;
 const EV_FINISH: f32 = 5.0;
+const EV_POWERUP: f32 = 6.0;
+const EV_SPIKE: f32 = 7.0;
+const EV_EXPLODE: f32 = 8.0;
+const EV_GEM: f32 = 9.0;
 
 // Floats per record in the output buffers (mirrored in src/sim.ts).
-const BALL_STRIDE: usize = 8; // x y r hue px py bounces team
-const TRAIL_STRIDE: usize = 8; // x1 y1 x2 y2 radius hue alpha bounces
-const RING_STRIDE: usize = 8; // cx cy r thickness rot gap hue flash
+const BALL_STRIDE: usize = 8; // x y r hue px py bounces frozen
+const SEG_STRIDE: usize = 8; // x1 y1 x2 y2 radius hue alpha bounces (trails, walls, impact lines)
+const RING_STRIDE: usize = 12; // cx cy r thickness rot gap hue flash spikeCenter spikeArc glassFrac spikeSize
 const PARTICLE_STRIDE: usize = 6; // x y size hue alpha 0
+const GEM_STRIDE: usize = 6; // x y size hue alpha mult
+const POWERUP_STRIDE: usize = 6; // x y r kind lifeFrac pulse
 const EVENT_STRIDE: usize = 6; // t kind strength r level team
 
 #[derive(Clone, Copy, PartialEq)]
@@ -72,6 +93,10 @@ enum Mode {
     Merge,
     Koth,
     Symmetric,
+    Infinite,
+    Accumulation,
+    Collision,
+    Spiral,
 }
 
 impl Mode {
@@ -83,9 +108,20 @@ impl Mode {
             4 => Mode::Merge,
             5 => Mode::Koth,
             6 => Mode::Symmetric,
+            7 => Mode::Infinite,
+            8 => Mode::Accumulation,
+            9 => Mode::Collision,
+            10 => Mode::Spiral,
             _ => Mode::Escape,
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SpikeEffect {
+    Bounce,
+    Destroy,
+    Freeze,
 }
 
 struct Rng(u32);
@@ -118,6 +154,11 @@ struct Ball {
     py: f64,
     alive: bool,
     escaped: bool,
+    frozen: bool,
+    /// Frozen balls ride along with their ring: angle relative to ring rotation, and distance.
+    frozen_ring: usize,
+    frozen_angle: f64,
+    frozen_dist: f64,
     bounces: u32,
     level: u32,
     team: u32,
@@ -125,6 +166,9 @@ struct Ball {
     trail: [f32; MAX_TRAIL * 2],
     trail_head: usize,
     trail_count: usize,
+    contacts: [f32; MAX_CONTACTS * 2],
+    contact_head: usize,
+    contact_count: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -137,6 +181,34 @@ struct Ring {
     hue: f64,
     flash: f64,
     alive: bool,
+    hp: u32,
+    hits: u32,
+}
+
+/// A thick line segment in the spiral's local (unrotated) frame.
+struct Wall {
+    ax: f64,
+    ay: f64,
+    bx: f64,
+    by: f64,
+    r_min: f64,
+    r_max: f64,
+}
+
+struct Gem {
+    lx: f64,
+    ly: f64,
+    r: f64,
+    mult: u32,
+    alive: bool,
+}
+
+struct PowerUp {
+    x: f64,
+    y: f64,
+    r: f64,
+    kind: u32,
+    life: f64,
 }
 
 struct Particle {
@@ -176,6 +248,20 @@ struct Params {
     initial_speed: f64,
     max_speed: f64,
     ball_collisions: bool,
+    spike_arc: f64,
+    spike_effect: SpikeEffect,
+    spike_size: f64,
+    ring_hp: u32,
+    /// Impacts slower than this make no sound (stacked balls jitter constantly in Merge).
+    min_sound_speed: f64,
+    powerups: bool,
+    powerup_interval: f64,
+    impact_lines: usize,
+    impact_mode: u32,
+    explode_count: usize,
+    spiral_turns: f64,
+    spiral_speed: f64,
+    gem_count: usize,
     team_hues: Vec<f64>,
 }
 
@@ -187,16 +273,26 @@ struct Sim {
     step: u64,
     balls: Vec<Ball>,
     rings: Vec<Ring>,
+    walls: Vec<Wall>,
+    gems: Vec<Gem>,
+    powerups: Vec<PowerUp>,
     particles: Vec<Particle>,
     pending: Vec<Ball>,
     next_id: u32,
     counter: f64,
+    multiplier: f64,
+    total_bounces: u32,
     rings_broken: u32,
     finished: bool,
     frozen: bool,
     finish_time: f64,
     winner_team: i32,
     spawn_timer: f64,
+    powerup_timer: f64,
+    exploded: bool,
+    spiral_rot: f64,
+    spiral_end: f64,
+    spiral_gap: f64,
     // Uniform grid for ball-ball collisions (linked lists, no per-tick allocation).
     grid_heads: Vec<i32>,
     grid_next: Vec<i32>,
@@ -205,6 +301,10 @@ struct Sim {
     out_trails: Vec<f32>,
     out_rings: Vec<f32>,
     out_particles: Vec<f32>,
+    out_walls: Vec<f32>,
+    out_gems: Vec<f32>,
+    out_powerups: Vec<f32>,
+    out_lines: Vec<f32>,
     out_events: Vec<f32>,
 }
 
@@ -216,6 +316,11 @@ fn ang_diff(a: f64, b: f64) -> f64 {
         d += 2.0 * PI;
     }
     d
+}
+
+fn rotate(x: f64, y: f64, a: f64) -> (f64, f64) {
+    let (s, c) = a.sin_cos();
+    (x * c - y * s, x * s + y * c)
 }
 
 impl Sim {
@@ -247,6 +352,23 @@ impl Sim {
             initial_speed: v[P_INITIAL_SPEED].max(0.0),
             max_speed: v[P_MAX_SPEED].max(10.0),
             ball_collisions: v[P_BALL_COLLISIONS] != 0.0,
+            spike_arc: v[P_SPIKE_ARC].clamp(0.0, 360.0).to_radians(),
+            spike_effect: match v[P_SPIKE_EFFECT] as i32 {
+                1 => SpikeEffect::Destroy,
+                2 => SpikeEffect::Freeze,
+                _ => SpikeEffect::Bounce,
+            },
+            spike_size: v[P_SPIKE_SIZE].max(2.0),
+            ring_hp: v[P_RING_HP].max(0.0) as u32,
+            min_sound_speed: if Mode::from(v[P_MODE]) == Mode::Merge { 220.0 } else { MIN_SOUND_SPEED },
+            powerups: v[P_POWERUPS] != 0.0,
+            powerup_interval: v[P_POWERUP_INTERVAL].max(0.2),
+            impact_lines: (v[P_IMPACT_LINES] as usize).min(MAX_CONTACTS),
+            impact_mode: v[P_IMPACT_MODE] as u32,
+            explode_count: (v[P_EXPLODE_COUNT] as usize).min(5_000),
+            spiral_turns: v[P_SPIRAL_TURNS].clamp(1.0, 20.0),
+            spiral_speed: v[P_SPIRAL_SPEED].to_radians(),
+            gem_count: (v[P_GEM_COUNT] as usize).min(200),
             team_hues: v[P_TEAM_HUES..P_TEAM_HUES + team_count].to_vec(),
         };
         let seed = v[P_SEED];
@@ -258,22 +380,36 @@ impl Sim {
             step: 0,
             balls: Vec::new(),
             rings: Vec::new(),
+            walls: Vec::new(),
+            gems: Vec::new(),
+            powerups: Vec::new(),
             particles: Vec::new(),
             pending: Vec::new(),
             next_id: 0,
             counter: 0.0,
+            multiplier: 1.0,
+            total_bounces: 0,
             rings_broken: 0,
             finished: false,
             frozen: false,
             finish_time: -1.0,
             winner_team: -1,
             spawn_timer: 0.0,
+            powerup_timer: 1.0,
+            exploded: false,
+            spiral_rot: 0.0,
+            spiral_end: 0.0,
+            spiral_gap: 0.0,
             grid_heads: Vec::new(),
             grid_next: Vec::new(),
             out_balls: Vec::new(),
             out_trails: Vec::new(),
             out_rings: Vec::new(),
             out_particles: Vec::new(),
+            out_walls: Vec::new(),
+            out_gems: Vec::new(),
+            out_powerups: Vec::new(),
+            out_lines: Vec::new(),
             out_events: Vec::new(),
         };
         sim.setup();
@@ -281,24 +417,30 @@ impl Sim {
     }
 
     fn setup(&mut self) {
-        let count = if self.p.mode == Mode::Destruction { self.p.ring_count } else { 1 };
-        let min_r = self.p.ball_radius * 2.5 + self.p.ring_thickness;
-        for i in 0..count {
-            let r = (self.p.ring_radius - (count - 1 - i) as f64 * self.p.ring_spacing).max(min_r);
-            let dir = if self.p.alternate && i % 2 == 1 { -1.0 } else { 1.0 };
-            self.rings.push(Ring {
-                r,
-                thickness: self.p.ring_thickness,
-                rot: -PI / 2.0 + i as f64 * 0.45,
-                rot_speed: self.p.rot_speed * dir,
-                gap: self.p.gap,
-                hue: (i as f64 * 360.0 / count as f64) % 360.0,
-                flash: 0.0,
-                alive: true,
-            });
+        if self.p.mode == Mode::Spiral {
+            self.setup_spiral();
+        } else {
+            let count = if self.p.mode == Mode::Destruction { self.p.ring_count } else { 1 };
+            let min_r = self.p.ball_radius * 2.5 + self.p.ring_thickness;
+            for i in 0..count {
+                let r = (self.p.ring_radius - (count - 1 - i) as f64 * self.p.ring_spacing).max(min_r);
+                let dir = if self.p.alternate && i % 2 == 1 { -1.0 } else { 1.0 };
+                self.rings.push(Ring {
+                    r,
+                    thickness: self.p.ring_thickness,
+                    rot: -PI / 2.0 + i as f64 * 0.45,
+                    rot_speed: self.p.rot_speed * dir,
+                    gap: self.p.gap,
+                    hue: (i as f64 * 360.0 / count as f64) % 360.0,
+                    flash: 0.0,
+                    alive: true,
+                    hp: self.p.ring_hp,
+                    hits: 0,
+                });
+            }
         }
 
-        let rin = self.inner_radius(0);
+        let rin = self.arena_radius();
         let (cx, cy) = (self.p.cx, self.p.cy);
         let n = self.p.initial_balls;
         match self.p.mode {
@@ -309,7 +451,7 @@ impl Sim {
                     self.add_ball(x, cy - rin * 0.55, 0.0, self.p.initial_speed, self.p.ball_radius, hue, 0, k as u32);
                 }
             }
-            Mode::Koth => {
+            Mode::Koth | Mode::Collision => {
                 for k in 0..n {
                     let a = k as f64 * 2.0 * PI / n.max(1) as f64 - PI / 2.0;
                     let dist = if n > 1 { rin * 0.45 } else { 0.0 };
@@ -324,6 +466,12 @@ impl Sim {
                     self.spawn_merge_ball();
                 }
             }
+            Mode::Spiral => {
+                for k in 0..n {
+                    let x = cx + self.rng.range(-2.0, 2.0);
+                    self.spawn_random_ball(x, cy, k as u32);
+                }
+            }
             _ => {
                 for k in 0..n {
                     let spread = if n > 1 { rin * 0.3 } else { 0.0 };
@@ -334,6 +482,55 @@ impl Sim {
             }
         }
         self.flush_pending();
+    }
+
+    /// Archimedean spiral wall from near the centre out to `ring_radius`, with glass gems along the corridor.
+    fn setup_spiral(&mut self) {
+        let turns = self.p.spiral_turns;
+        let r0 = (self.p.ball_radius * 3.0 + self.p.ring_thickness).max(self.p.ring_radius * 0.1);
+        let gap = (self.p.ring_radius - r0) / turns;
+        self.spiral_gap = gap;
+        self.spiral_end = r0 + gap * turns;
+        let b = gap / (2.0 * PI);
+        let segs = (turns * 72.0) as usize;
+        let total = turns * 2.0 * PI;
+        let point = |t: f64| -> (f64, f64) {
+            let r = r0 + b * t;
+            (r * t.cos(), r * t.sin())
+        };
+        let half = self.p.ring_thickness * 0.5;
+        for i in 0..segs {
+            let t0 = total * i as f64 / segs as f64;
+            let t1 = total * (i + 1) as f64 / segs as f64;
+            let (ax, ay) = point(t0);
+            let (bx, by) = point(t1);
+            let ra = (ax * ax + ay * ay).sqrt();
+            let rb = (bx * bx + by * by).sqrt();
+            self.walls.push(Wall { ax, ay, bx, by, r_min: ra.min(rb) - half, r_max: ra.max(rb) + half });
+        }
+        // Gems sit in the middle of the corridor (between turn k and k+1), spaced along the path.
+        let gem_r = (gap * 0.18).clamp(6.0, 22.0);
+        let n = self.p.gem_count;
+        for k in 0..n {
+            let t = 2.0 * PI * 0.6 + (total - 2.0 * PI * 1.2) * (k as f64 + 0.5) / n.max(1) as f64;
+            let r = r0 + b * t + gap * 0.5;
+            if r + gem_r > self.spiral_end {
+                continue;
+            }
+            let mult = [2u32, 2, 3, 2, 5][k % 5];
+            self.gems.push(Gem { lx: r * t.cos(), ly: r * t.sin(), r: gem_r, mult, alive: true });
+        }
+    }
+
+    /// Radius of free space where balls start (inner surface of the innermost ring).
+    fn arena_radius(&self) -> f64 {
+        if let Some(r) = self.rings.first() {
+            r.r - r.thickness * 0.5
+        } else if self.p.mode == Mode::Spiral {
+            self.p.ring_radius
+        } else {
+            self.p.ring_radius
+        }
     }
 
     fn team_hue(&self, k: usize) -> f64 {
@@ -372,6 +569,10 @@ impl Sim {
             py: y,
             alive: true,
             escaped: false,
+            frozen: false,
+            frozen_ring: 0,
+            frozen_angle: 0.0,
+            frozen_dist: 0.0,
             bounces: 0,
             level,
             team,
@@ -379,6 +580,9 @@ impl Sim {
             trail: [0.0; MAX_TRAIL * 2],
             trail_head: 0,
             trail_count: 0,
+            contacts: [0.0; MAX_CONTACTS * 2],
+            contact_head: 0,
+            contact_count: 0,
         });
     }
 
@@ -398,7 +602,7 @@ impl Sim {
     }
 
     fn spawn_merge_ball(&mut self) {
-        let rin = self.inner_radius(0);
+        let rin = self.arena_radius();
         let roll = self.rng.next();
         let level = if roll < 0.5 { 0 } else if roll < 0.82 { 1 } else { 2 };
         let r = self.level_radius(level);
@@ -450,6 +654,29 @@ impl Sim {
         }
     }
 
+    fn shatter_ring(&mut self, ri: usize) {
+        let ring = self.rings[ri];
+        let pieces = (ring.r / 6.0).clamp(24.0, 140.0) as usize;
+        for k in 0..pieces {
+            let a = k as f64 / pieces as f64 * 2.0 * PI;
+            if ring.gap > 0.0 && ang_diff(a, ring.rot).abs() < ring.gap * 0.5 {
+                continue;
+            }
+            let s = self.fx_rng.range(80.0, 420.0);
+            let life = self.fx_rng.range(0.7, 1.5);
+            self.particles.push(Particle {
+                x: self.p.cx + a.cos() * ring.r,
+                y: self.p.cy + a.sin() * ring.r,
+                vx: a.cos() * s,
+                vy: a.sin() * s,
+                life,
+                max_life: life,
+                size: ring.thickness * self.fx_rng.range(0.4, 0.9),
+                hue: ring.hue,
+            });
+        }
+    }
+
     fn advance_to(&mut self, t: f64) {
         // Hard cap on work per call so a huge jump never locks the page.
         let mut budget = (HZ * 30.0) as u32;
@@ -478,36 +705,46 @@ impl Sim {
     }
 
     fn physics(&mut self) {
-        if self.p.mode == Mode::Merge {
-            self.spawn_timer -= DT;
-            if self.spawn_timer <= 0.0 {
-                if self.inside_count() < self.p.max_balls {
-                    self.spawn_merge_ball();
-                }
-                self.spawn_timer += self.p.spawn_interval;
-            }
-        }
+        self.spawn_timers();
 
         for ring in self.rings.iter_mut() {
             ring.rot += ring.rot_speed * DT;
             ring.flash = (ring.flash - DT * 4.0).max(0.0);
         }
+        self.spiral_rot -= self.p.spiral_speed * DT;
 
         let g = self.p.gravity;
+        let (cx, cy) = (self.p.cx, self.p.cy);
         for b in self.balls.iter_mut().filter(|b| b.alive) {
+            if b.frozen {
+                // Stuck on a spike: ride along with the ring.
+                if let Some(ring) = self.rings.get(b.frozen_ring) {
+                    let a = ring.rot + b.frozen_angle;
+                    b.x = cx + a.cos() * b.frozen_dist;
+                    b.y = cy + a.sin() * b.frozen_dist;
+                }
+                continue;
+            }
             b.vy += g * DT;
             b.x += b.vx * DT;
             b.y += b.vy * DT;
         }
 
         for i in 0..self.balls.len() {
-            if self.balls[i].alive && !self.balls[i].escaped {
-                self.collide_rings(i);
+            if self.balls[i].alive && !self.balls[i].escaped && !self.balls[i].frozen {
+                if self.p.mode == Mode::Spiral {
+                    self.collide_spiral(i);
+                } else {
+                    self.collide_rings(i);
+                }
             }
         }
 
         if self.p.ball_collisions || self.p.mode == Mode::Merge {
             self.collide_balls();
+        }
+        if !self.powerups.is_empty() {
+            self.collide_powerups();
         }
 
         let (w, h) = (self.p.w, self.p.h);
@@ -517,8 +754,72 @@ impl Sim {
             }
         }
         self.flush_pending();
+        self.check_counts();
         if self.step % 240 == 0 {
             self.balls.retain(|b| b.alive);
+        }
+    }
+
+    fn spawn_timers(&mut self) {
+        let spawns = matches!(self.p.mode, Mode::Merge | Mode::Accumulation)
+            && !(self.p.mode == Mode::Accumulation && self.rings.iter().all(|r| !r.alive));
+        if spawns {
+            self.spawn_timer -= DT;
+            if self.spawn_timer <= 0.0 {
+                if self.inside_count() < self.p.max_balls {
+                    if self.p.mode == Mode::Merge {
+                        self.spawn_merge_ball();
+                    } else {
+                        let (cx, cy) = (self.p.cx, self.p.cy);
+                        self.spawn_random_ball(cx, cy, 0);
+                    }
+                }
+                self.spawn_timer += self.p.spawn_interval;
+            }
+        }
+        if self.p.powerups && self.p.mode != Mode::Spiral {
+            for p in self.powerups.iter_mut() {
+                p.life -= DT;
+            }
+            self.powerups.retain(|p| p.life > 0.0);
+            self.powerup_timer -= DT;
+            if self.powerup_timer <= 0.0 {
+                self.powerup_timer += self.p.powerup_interval;
+                if self.powerups.len() < MAX_POWERUPS && !self.rings.is_empty() {
+                    let rin = self.inner_radius(0);
+                    let a = self.rng.range(0.0, 2.0 * PI);
+                    let d = self.rng.range(0.15, 0.7) * rin;
+                    let kind = (self.rng.next() * 4.0) as u32;
+                    self.powerups.push(PowerUp {
+                        x: self.p.cx + a.cos() * d,
+                        y: self.p.cy + a.sin() * d,
+                        r: (self.p.ball_radius * 1.4).max(18.0),
+                        kind: kind.min(3),
+                        life: POWERUP_LIFE,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Mode end conditions that depend on how many balls exist.
+    fn check_counts(&mut self) {
+        if self.finished {
+            return;
+        }
+        match self.p.mode {
+            Mode::Escape | Mode::Infinite if self.p.spawn_on_escape > 0 => {
+                if self.inside_count() >= self.p.max_balls {
+                    self.finish(false);
+                }
+            }
+            Mode::Escape | Mode::Grow | Mode::Trail | Mode::Collision if self.exploded || self.p.mode != Mode::Collision => {
+                // Everyone gone (spikes / escaped) and nothing left to bounce.
+                if self.balls.iter().all(|b| !b.alive || b.escaped) && self.step > 2 {
+                    self.finish(false);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -541,7 +842,18 @@ impl Sim {
         }
     }
 
+    fn record_contact(b: &mut Ball, x: f64, y: f64) {
+        let h = b.contact_head;
+        b.contacts[h * 2] = x as f32;
+        b.contacts[h * 2 + 1] = y as f32;
+        b.contact_head = (h + 1) % MAX_CONTACTS;
+        b.contact_count = (b.contact_count + 1).min(MAX_CONTACTS);
+    }
+
     fn collide_rings(&mut self, i: usize) {
+        if self.rings.is_empty() {
+            return;
+        }
         let mut ri = self.balls[i].ring_idx;
         while ri < self.rings.len() && !self.rings[ri].alive {
             ri += 1;
@@ -555,14 +867,16 @@ impl Sim {
         let (cx, cy) = (self.p.cx, self.p.cy);
         let e = self.p.restitution;
         let rin = ring.r - ring.thickness * 0.5;
-        let mut bounced: Option<f64> = None;
+        let mut bounced: Option<(f64, f64, f64)> = None; // (speed, contact x, contact y)
         let mut exited = false;
+        let mut contact_angle = 0.0;
         {
             let b = &mut self.balls[i];
             let dx = b.x - cx;
             let dy = b.y - cy;
             let d = (dx * dx + dy * dy).sqrt().max(1e-9);
-            let in_gap = ring.gap > 0.0 && ang_diff(dy.atan2(dx), ring.rot).abs() < ring.gap * 0.5;
+            let ang = dy.atan2(dx);
+            let in_gap = ring.gap > 0.0 && ang_diff(ang, ring.rot).abs() < ring.gap * 0.5;
             if !in_gap {
                 if d + b.r > rin {
                     let (nx, ny) = (dx / d, dy / d);
@@ -573,7 +887,8 @@ impl Sim {
                     if vn > 0.0 {
                         b.vx -= (1.0 + e) * vn * nx;
                         b.vy -= (1.0 + e) * vn * ny;
-                        bounced = Some(vn);
+                        bounced = Some((vn, cx + nx * rin, cy + ny * rin));
+                        contact_angle = ang;
                     }
                 }
             } else {
@@ -595,7 +910,8 @@ impl Sim {
                         if vn < 0.0 {
                             b.vx -= (1.0 + e) * vn * nx;
                             b.vy -= (1.0 + e) * vn * ny;
-                            bounced = Some(-vn);
+                            bounced = Some((-vn, ex, ey));
+                            contact_angle = a;
                         }
                     }
                 }
@@ -604,11 +920,137 @@ impl Sim {
                 }
             }
         }
-        if let Some(vn) = bounced {
-            self.on_bounce(i, ri, vn);
+        if let Some((vn, px, py)) = bounced {
+            let on_spike = self.p.spike_arc > 0.0
+                && ang_diff(contact_angle, Self::spike_center(&ring)).abs() < self.p.spike_arc * 0.5;
+            if on_spike && self.p.spike_effect != SpikeEffect::Bounce {
+                self.on_spike(i, ri);
+                return;
+            }
+            self.on_bounce(i, ri, vn, px, py);
         }
         if exited {
             self.on_exit(i, ri);
+        }
+    }
+
+    /// Spikes sit opposite the gap; on a closed ring they start at the top so the ball
+    /// doesn't land on them on its very first fall.
+    fn spike_center(ring: &Ring) -> f64 {
+        if ring.gap > 0.0 { ring.rot + PI } else { ring.rot }
+    }
+
+    fn on_spike(&mut self, i: usize, ri: usize) {
+        let (x, y, r, hue, team) = {
+            let b = &self.balls[i];
+            (b.x, b.y, b.r, b.hue, b.team)
+        };
+        self.rings[ri].flash = 1.0;
+        self.emit(EV_SPIKE, 1.0, r, 0.0, team as f64);
+        match self.p.spike_effect {
+            SpikeEffect::Destroy => {
+                self.balls[i].alive = false;
+                self.burst(x, y, hue, (r * 1.5).clamp(12.0, 80.0) as usize, 520.0, r * 0.35);
+                if self.p.mode == Mode::Grow || self.p.mode == Mode::Trail {
+                    self.finish(false);
+                }
+            }
+            SpikeEffect::Freeze => {
+                let ring = self.rings[ri];
+                let b = &mut self.balls[i];
+                let (dx, dy) = (b.x - self.p.cx, b.y - self.p.cy);
+                b.frozen = true;
+                b.vx = 0.0;
+                b.vy = 0.0;
+                b.frozen_ring = ri;
+                b.frozen_angle = dy.atan2(dx) - ring.rot;
+                b.frozen_dist = (dx * dx + dy * dy).sqrt();
+                self.counter += 1.0;
+            }
+            SpikeEffect::Bounce => {}
+        }
+    }
+
+    fn collide_spiral(&mut self, i: usize) {
+        let (cx, cy) = (self.p.cx, self.p.cy);
+        let e = self.p.restitution;
+        let half = self.p.ring_thickness * 0.5;
+        let rot = self.spiral_rot;
+        let omega = -self.p.spiral_speed;
+        let mut bounce: Option<(f64, f64, f64)> = None;
+        let mut hit_gem: Option<usize> = None;
+        {
+            let b = &mut self.balls[i];
+            let dx = b.x - cx;
+            let dy = b.y - cy;
+            let d = (dx * dx + dy * dy).sqrt();
+            for wall in self.walls.iter() {
+                if d + b.r < wall.r_min || d - b.r > wall.r_max {
+                    continue;
+                }
+                let (ax, ay) = rotate(wall.ax, wall.ay, rot);
+                let (bx, by) = rotate(wall.bx, wall.by, rot);
+                let (ax, ay, bx, by) = (ax + cx, ay + cy, bx + cx, by + cy);
+                let (abx, aby) = (bx - ax, by - ay);
+                let len2 = abx * abx + aby * aby;
+                let t = if len2 > 1e-9 { (((b.x - ax) * abx + (b.y - ay) * aby) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                let (qx, qy) = (ax + abx * t, ay + aby * t);
+                let (ddx, ddy) = (b.x - qx, b.y - qy);
+                let dist = (ddx * ddx + ddy * ddy).sqrt();
+                let min = b.r + half;
+                if dist < min && dist > 1e-9 {
+                    let (nx, ny) = (ddx / dist, ddy / dist);
+                    b.x = qx + nx * min;
+                    b.y = qy + ny * min;
+                    // The wall moves with the spiral's rotation; bounce relative to it.
+                    let (wvx, wvy) = (-omega * (qy - cy), omega * (qx - cx));
+                    let vn = (b.vx - wvx) * nx + (b.vy - wvy) * ny;
+                    if vn < 0.0 {
+                        b.vx -= (1.0 + e) * vn * nx;
+                        b.vy -= (1.0 + e) * vn * ny;
+                        bounce = Some((-vn, qx, qy));
+                    }
+                }
+            }
+            for (gi, g) in self.gems.iter().enumerate() {
+                if !g.alive {
+                    continue;
+                }
+                let (gx, gy) = rotate(g.lx, g.ly, rot);
+                let (ddx, ddy) = (b.x - gx - cx, b.y - gy - cy);
+                let dist = (ddx * ddx + ddy * ddy).sqrt();
+                let min = b.r + g.r;
+                if dist < min && dist > 1e-9 {
+                    let (nx, ny) = (ddx / dist, ddy / dist);
+                    let vn = b.vx * nx + b.vy * ny;
+                    if vn < 0.0 {
+                        b.vx -= (1.0 + e) * vn * nx;
+                        b.vy -= (1.0 + e) * vn * ny;
+                    }
+                    hit_gem = Some(gi);
+                    break;
+                }
+            }
+            if d - b.r > self.spiral_end + self.spiral_gap * 0.5 {
+                b.escaped = true;
+            }
+        }
+        if let Some((vn, px, py)) = bounce {
+            self.on_wall_bounce(i, vn, px, py);
+        }
+        if let Some(gi) = hit_gem {
+            let g = &mut self.gems[gi];
+            g.alive = false;
+            let (gx, gy) = rotate(g.lx, g.ly, rot);
+            let (mult, gr) = (g.mult, g.r);
+            self.multiplier = (self.multiplier * mult as f64).min(1e9);
+            self.emit(EV_GEM, 1.0, gr, mult as f64, 0.0);
+            self.burst(gx + cx, gy + cy, 190.0, 24, 380.0, gr * 0.4);
+        }
+        if self.balls[i].escaped {
+            let r = self.balls[i].r;
+            self.emit(EV_ESCAPE, 1.0, r, 0.0, 0.0);
+            self.finish(false);
         }
     }
 
@@ -621,13 +1063,35 @@ impl Sim {
         }
     }
 
-    fn on_bounce(&mut self, i: usize, ri: usize, vn: f64) {
+    fn on_wall_bounce(&mut self, i: usize, vn: f64, px: f64, py: f64) {
+        let impact = self.p.impact_lines > 0;
+        let mut b = self.balls[i].clone();
+        b.vx *= self.p.speed_boost;
+        b.vy *= self.p.speed_boost;
+        self.clamp_speed(&mut b);
+        b.bounces += 1;
+        if impact {
+            Self::record_contact(&mut b, px, py);
+        }
+        let (r, level, team) = (b.r, b.level, b.team);
+        self.balls[i] = b;
+        if vn > self.p.min_sound_speed {
+            self.total_bounces += 1;
+            self.counter += self.multiplier;
+            self.emit(EV_BOUNCE, vn, r, level as f64, team as f64);
+        }
+    }
+
+    fn on_bounce(&mut self, i: usize, ri: usize, vn: f64, px: f64, py: f64) {
         let boost = self.p.speed_boost;
         let mut b = self.balls[i].clone();
         b.vx *= boost;
         b.vy *= boost;
         self.clamp_speed(&mut b);
         b.bounces += 1;
+        if self.p.impact_lines > 0 {
+            Self::record_contact(&mut b, px, py);
+        }
         self.rings[ri].flash = 1.0;
 
         let mut fill_done = false;
@@ -640,11 +1104,45 @@ impl Sim {
         }
         let (r, level, team) = (b.r, b.level, b.team);
         self.balls[i] = b;
-        if vn > MIN_SOUND_SPEED {
+        if vn > self.p.min_sound_speed {
+            self.total_bounces += 1;
             self.emit(EV_BOUNCE, vn, r, level as f64, team as f64);
         }
         if fill_done {
             self.finish(true);
+        }
+
+        // Glass rings crack a little on every hit and shatter when out of hit points.
+        let ring = &mut self.rings[ri];
+        if ring.hp > 0 && vn > self.p.min_sound_speed {
+            ring.hits += 1;
+            if ring.hits >= ring.hp {
+                self.break_glass(ri);
+            }
+        }
+    }
+
+    fn break_glass(&mut self, ri: usize) {
+        self.rings[ri].alive = false;
+        self.rings_broken += 1;
+        let r = self.rings[ri].r;
+        self.emit(EV_BREAK, 1.0, r, ri as f64, 0.0);
+        self.shatter_ring(ri);
+        // Release everything stuck to this ring.
+        let (cx, cy) = (self.p.cx, self.p.cy);
+        for b in self.balls.iter_mut().filter(|b| b.frozen && b.frozen_ring == ri) {
+            b.frozen = false;
+            let (dx, dy) = (b.x - cx, b.y - cy);
+            let d = (dx * dx + dy * dy).sqrt().max(1e-6);
+            let s = self.fx_rng.range(200.0, 600.0);
+            b.vx = dx / d * s;
+            b.vy = dy / d * s;
+        }
+        if self.p.mode == Mode::Destruction {
+            self.counter = self.rings_broken as f64;
+        }
+        if self.rings.iter().all(|r| !r.alive) {
+            self.finish(false);
         }
     }
 
@@ -655,32 +1153,12 @@ impl Sim {
         };
         match self.p.mode {
             Mode::Destruction => {
-                let ring = self.rings[ri];
                 self.rings[ri].alive = false;
                 self.rings_broken += 1;
                 self.counter = self.rings_broken as f64;
-                self.emit(EV_BREAK, 1.0, ring.r, ri as f64, team as f64);
-                let pieces = (ring.r / 6.0).clamp(24.0, 140.0) as usize;
-                for k in 0..pieces {
-                    let a = k as f64 / pieces as f64 * 2.0 * PI;
-                    if ring.gap > 0.0 && ang_diff(a, ring.rot).abs() < ring.gap * 0.5 {
-                        continue;
-                    }
-                    let px = self.p.cx + a.cos() * ring.r;
-                    let py = self.p.cy + a.sin() * ring.r;
-                    let s = self.fx_rng.range(80.0, 420.0);
-                    let life = self.fx_rng.range(0.7, 1.5);
-                    self.particles.push(Particle {
-                        x: px,
-                        y: py,
-                        vx: a.cos() * s,
-                        vy: a.sin() * s,
-                        life,
-                        max_life: life,
-                        size: ring.thickness * self.fx_rng.range(0.4, 0.9),
-                        hue: ring.hue,
-                    });
-                }
+                let r = self.rings[ri].r;
+                self.emit(EV_BREAK, 1.0, r, ri as f64, team as f64);
+                self.shatter_ring(ri);
                 self.balls[i].ring_idx = ri + 1;
                 if self.rings.iter().all(|r| !r.alive) {
                     self.finish(false);
@@ -691,6 +1169,10 @@ impl Sim {
                 self.counter += 1.0;
                 self.emit(EV_ESCAPE, 1.0, br, 0.0, team as f64);
                 self.burst(bx, by, bhue, 10, 260.0, br * 0.35);
+                if self.p.spawn_on_escape == 0 {
+                    self.finish(false);
+                    return;
+                }
                 for _ in 0..self.p.spawn_on_escape {
                     if self.inside_count() >= self.p.max_balls {
                         break;
@@ -699,6 +1181,32 @@ impl Sim {
                     let jx = self.rng.range(-2.0, 2.0);
                     let jy = self.rng.range(-2.0, 2.0);
                     self.spawn_random_ball(cx + jx, cy + jy, 0);
+                }
+            }
+            Mode::Infinite => {
+                // The ball loops back to the centre and leaves clones behind.
+                self.counter += 1.0;
+                self.emit(EV_ESCAPE, 1.0, br, 0.0, team as f64);
+                self.burst(bx, by, bhue, 8, 220.0, br * 0.35);
+                let (cx, cy) = (self.p.cx, self.p.cy);
+                let dir = self.rng.range(0.0, 2.0 * PI);
+                let s = self.p.initial_speed;
+                {
+                    let b = &mut self.balls[i];
+                    b.x = cx;
+                    b.y = cy;
+                    b.vx = dir.cos() * s;
+                    b.vy = dir.sin() * s;
+                    b.trail_count = 0;
+                    b.px = cx;
+                    b.py = cy;
+                }
+                for _ in 0..self.p.spawn_on_escape {
+                    if self.inside_count() >= self.p.max_balls {
+                        break;
+                    }
+                    let jx = self.rng.range(-2.0, 2.0);
+                    self.spawn_random_ball(cx + jx, cy, 0);
                 }
             }
             Mode::Koth => {
@@ -716,6 +1224,56 @@ impl Sim {
                 self.emit(EV_ESCAPE, 1.0, br, 0.0, team as f64);
             }
         }
+    }
+
+    fn collide_powerups(&mut self) {
+        let mut k = 0;
+        while k < self.powerups.len() {
+            let (px, py, pr, kind) = {
+                let p = &self.powerups[k];
+                (p.x, p.y, p.r, p.kind)
+            };
+            let hit = self.balls.iter().position(|b| {
+                b.alive && !b.escaped && !b.frozen && {
+                    let (dx, dy) = (b.x - px, b.y - py);
+                    dx * dx + dy * dy < (b.r + pr) * (b.r + pr)
+                }
+            });
+            if let Some(i) = hit {
+                self.powerups.swap_remove(k);
+                self.apply_powerup(i, kind);
+                continue;
+            }
+            k += 1;
+        }
+    }
+
+    fn apply_powerup(&mut self, i: usize, kind: u32) {
+        let rin = if self.rings.is_empty() { self.p.ring_radius } else { self.inner_radius(0) };
+        let (x, y, r, hue) = {
+            let b = &self.balls[i];
+            (b.x, b.y, b.r, b.hue)
+        };
+        match kind {
+            0 => {
+                // Split: a mirrored twin.
+                if self.inside_count() < self.p.max_balls {
+                    let b = self.balls[i].clone();
+                    self.add_ball(b.x, b.y, -b.vx, b.vy, b.r, (b.hue + 60.0) % 360.0, b.level, b.team);
+                }
+            }
+            1 => {
+                let mut b = self.balls[i].clone();
+                b.vx *= 1.35;
+                b.vy *= 1.35;
+                self.clamp_speed(&mut b);
+                self.balls[i] = b;
+            }
+            2 => self.balls[i].r = (r * 1.3).min(rin * 0.5),
+            _ => self.balls[i].r = (r * 0.75).max(3.0),
+        }
+        self.emit(EV_POWERUP, 1.0, r, kind as f64, 0.0);
+        self.burst(x, y, hue, 16, 300.0, r * 0.3);
     }
 
     fn collide_balls(&mut self) {
@@ -750,7 +1308,7 @@ impl Sim {
                 continue;
             }
             let (gx, gy) = cell_of(self.balls[i].x, self.balls[i].y);
-            for oy in -1..=1 {
+            'cells: for oy in -1..=1 {
                 let yy = gy + oy;
                 if yy < 0 || yy >= gh {
                     continue;
@@ -766,28 +1324,23 @@ impl Sim {
                         if ju > i {
                             self.resolve_pair(i, ju);
                             if !self.balls[i].alive {
-                                break;
+                                break 'cells;
                             }
                         }
                         j = self.grid_next[ju];
                     }
-                    if !self.balls[i].alive {
-                        break;
-                    }
-                }
-                if !self.balls[i].alive {
-                    break;
                 }
             }
         }
     }
 
     fn resolve_pair(&mut self, i: usize, j: usize) {
+        let mode = self.p.mode;
         let (a, b) = {
             let (lo, hi) = self.balls.split_at_mut(j);
             (&mut lo[i], &mut hi[0])
         };
-        if !a.alive || !b.alive || a.escaped || b.escaped {
+        if !a.alive || !b.alive || a.escaped || b.escaped || (a.frozen && b.frozen) {
             return;
         }
         let dx = b.x - a.x;
@@ -797,7 +1350,7 @@ impl Sim {
         if d2 >= rs * rs || d2 < 1e-12 {
             return;
         }
-        if self.p.mode == Mode::Merge && a.level == b.level && a.level < MAX_LEVEL {
+        if mode == Mode::Merge && a.level == b.level && a.level < MERGE_GOAL {
             let level = a.level + 1;
             let (ma, mb) = (a.r * a.r, b.r * b.r);
             let m = ma + mb;
@@ -812,26 +1365,52 @@ impl Sim {
             self.add_ball(x, y, vx, vy, r, Self::level_hue(level), level, 0);
             self.emit(EV_MERGE, 1.0, r, level as f64, 0.0);
             self.burst(x, y, Self::level_hue(level), 14, 260.0, r * 0.25);
+            if level >= MERGE_GOAL {
+                self.finish(false);
+            }
+            return;
+        }
+        if mode == Mode::Collision && !self.exploded && !a.frozen && !b.frozen {
+            let x = (a.x + b.x) * 0.5;
+            let y = (a.y + b.y) * 0.5;
+            let (ha, hb) = (a.hue, b.hue);
+            a.alive = false;
+            b.alive = false;
+            self.exploded = true;
+            self.counter = self.p.explode_count as f64;
+            let s = self.p.initial_speed.max(300.0) * 1.2;
+            for k in 0..self.p.explode_count {
+                let ang = self.rng.range(0.0, 2.0 * PI);
+                let sp = self.rng.range(0.3, 1.0) * s;
+                let hue = if k % 2 == 0 { ha } else { hb };
+                let r = self.p.ball_radius * 0.45;
+                self.add_ball(x, y, ang.cos() * sp, ang.sin() * sp, r.max(2.0), (hue + k as f64 * 3.0) % 360.0, 0, 0);
+            }
+            self.emit(EV_EXPLODE, 1.0, rs, 0.0, 0.0);
+            self.burst(x, y, ha, 60, 700.0, self.p.ball_radius * 0.4);
+            self.finish(false);
             return;
         }
         let d = d2.sqrt();
         let (nx, ny) = (dx / d, dy / d);
         let overlap = rs - d;
-        let (ma, mb) = (a.r * a.r, b.r * b.r);
-        let total = ma + mb;
-        a.x -= nx * overlap * mb / total;
-        a.y -= ny * overlap * mb / total;
-        b.x += nx * overlap * ma / total;
-        b.y += ny * overlap * ma / total;
+        // Frozen balls are immovable (infinite mass).
+        let ma = if a.frozen { 0.0 } else { 1.0 / (a.r * a.r) };
+        let mb = if b.frozen { 0.0 } else { 1.0 / (b.r * b.r) };
+        let inv = ma + mb;
+        a.x -= nx * overlap * ma / inv;
+        a.y -= ny * overlap * ma / inv;
+        b.x += nx * overlap * mb / inv;
+        b.y += ny * overlap * mb / inv;
         let rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
         if rv < 0.0 {
             let e = self.p.restitution.min(1.0);
-            let jimp = -(1.0 + e) * rv / (1.0 / ma + 1.0 / mb);
-            a.vx -= jimp / ma * nx;
-            a.vy -= jimp / ma * ny;
-            b.vx += jimp / mb * nx;
-            b.vy += jimp / mb * ny;
-            if -rv > 150.0 {
+            let jimp = -(1.0 + e) * rv / inv;
+            a.vx -= jimp * ma * nx;
+            a.vy -= jimp * ma * ny;
+            b.vx += jimp * mb * nx;
+            b.vy += jimp * mb * ny;
+            if -rv > self.p.min_sound_speed.max(150.0) {
                 let (r, level, team) = (a.r.min(b.r), a.level, a.team);
                 self.emit(EV_HIT, -rv, r, level as f64, team as f64);
             }
@@ -843,7 +1422,13 @@ impl Sim {
         self.out_trails.clear();
         self.out_rings.clear();
         self.out_particles.clear();
+        self.out_walls.clear();
+        self.out_gems.clear();
+        self.out_powerups.clear();
+        self.out_lines.clear();
         let trail_len = trail_len.min(MAX_TRAIL);
+        let lines = self.p.impact_lines;
+        let impact_mode = self.p.impact_mode;
         for b in self.balls.iter_mut().filter(|b| b.alive) {
             self.out_balls.extend_from_slice(&[
                 b.x as f32,
@@ -853,54 +1438,74 @@ impl Sim {
                 b.px as f32,
                 b.py as f32,
                 b.bounces as f32,
-                b.team as f32,
+                b.frozen as u32 as f32,
             ]);
             b.px = b.x;
             b.py = b.y;
             let count = b.trail_count.min(trail_len);
-            if count == 0 {
-                continue;
-            }
             let (mut lx, mut ly) = (b.x as f32, b.y as f32);
             for k in 0..count {
                 let idx = (b.trail_head + MAX_TRAIL - 1 - k) % MAX_TRAIL;
                 let (tx, ty) = (b.trail[idx * 2], b.trail[idx * 2 + 1]);
                 let f = 1.0 - (k as f32 + 1.0) / (count as f32 + 1.0);
-                self.out_trails.extend_from_slice(&[
-                    lx,
-                    ly,
-                    tx,
-                    ty,
-                    b.r as f32 * (0.35 + 0.6 * f),
-                    b.hue as f32,
-                    f * 0.6,
-                    b.bounces as f32,
-                ]);
+                self.out_trails.extend_from_slice(&[lx, ly, tx, ty, b.r as f32 * (0.35 + 0.6 * f), b.hue as f32, f * 0.6, b.bounces as f32]);
                 lx = tx;
                 ly = ty;
             }
+            // Impact lines: strings from the ball to its last contacts, or a polyline through them.
+            let n = b.contact_count.min(lines);
+            let (mut px, mut py) = (b.x as f32, b.y as f32);
+            for k in 0..n {
+                let idx = (b.contact_head + MAX_CONTACTS - 1 - k) % MAX_CONTACTS;
+                let (cx, cy) = (b.contacts[idx * 2], b.contacts[idx * 2 + 1]);
+                let alpha = 0.85 * (1.0 - k as f32 / (n as f32 + 1.0));
+                let (sx, sy) = if impact_mode == 2 { (px, py) } else { (b.x as f32, b.y as f32) };
+                self.out_lines.extend_from_slice(&[sx, sy, cx, cy, 1.6, b.hue as f32, alpha, b.bounces as f32]);
+                px = cx;
+                py = cy;
+            }
         }
+        let (cx, cy) = (self.p.cx as f32, self.p.cy as f32);
         for r in self.rings.iter().filter(|r| r.alive) {
+            let glass = if r.hp > 0 { 1.0 - r.hits as f32 / r.hp as f32 } else { -1.0 };
             self.out_rings.extend_from_slice(&[
-                self.p.cx as f32,
-                self.p.cy as f32,
+                cx,
+                cy,
                 r.r as f32,
                 r.thickness as f32,
                 r.rot as f32,
                 r.gap as f32,
                 r.hue as f32,
                 r.flash as f32,
+                Self::spike_center(r) as f32,
+                self.p.spike_arc as f32,
+                glass,
+                self.p.spike_size as f32,
+            ]);
+        }
+        let rot = self.spiral_rot;
+        let half = self.p.ring_thickness as f32 * 0.5;
+        for w in &self.walls {
+            let (ax, ay) = rotate(w.ax, w.ay, rot);
+            let (bx, by) = rotate(w.bx, w.by, rot);
+            self.out_walls.extend_from_slice(&[ax as f32 + cx, ay as f32 + cy, bx as f32 + cx, by as f32 + cy, half, 0.0, 1.0, 0.0]);
+        }
+        for g in self.gems.iter().filter(|g| g.alive) {
+            let (gx, gy) = rotate(g.lx, g.ly, rot);
+            self.out_gems.extend_from_slice(&[gx as f32 + cx, gy as f32 + cy, g.r as f32, 190.0, 1.0, g.mult as f32]);
+        }
+        for p in &self.powerups {
+            self.out_powerups.extend_from_slice(&[
+                p.x as f32,
+                p.y as f32,
+                p.r as f32,
+                p.kind as f32,
+                (p.life / POWERUP_LIFE) as f32,
+                (self.time * 6.0).sin() as f32,
             ]);
         }
         for p in &self.particles {
-            self.out_particles.extend_from_slice(&[
-                p.x as f32,
-                p.y as f32,
-                p.size as f32,
-                p.hue as f32,
-                (p.life / p.max_life) as f32,
-                0.0,
-            ]);
+            self.out_particles.extend_from_slice(&[p.x as f32, p.y as f32, p.size as f32, p.hue as f32, (p.life / p.max_life) as f32, 0.0]);
         }
     }
 
@@ -924,6 +1529,15 @@ impl Sim {
                 (max_r / (rin * 0.985) * 100.0).min(100.0)
             }
             9 => self.balls.iter().filter(|b| b.alive).count() as f64,
+            10 => self.total_bounces as f64,
+            11 => self.balls.iter().filter(|b| b.alive && b.frozen).count() as f64,
+            12 => self.multiplier,
+            13 => self
+                .rings
+                .iter()
+                .find(|r| r.alive && r.hp > 0)
+                .map(|r| 1.0 - r.hits as f64 / r.hp as f64)
+                .unwrap_or(-1.0),
             _ => 0.0,
         }
     }
@@ -951,6 +1565,7 @@ pub extern "C" fn params_ptr() -> *mut f64 {
     PARAMS.with(|p| p.borrow_mut().as_mut_ptr())
 }
 
+/// (Re)builds the simulation from the parameter buffer. Safe to call repeatedly.
 #[no_mangle]
 pub extern "C" fn init() {
     let sim = PARAMS.with(|p| Sim::new(&p.borrow()));
@@ -992,7 +1607,11 @@ macro_rules! buffer_exports {
 }
 
 buffer_exports!(balls_ptr, balls_len, out_balls, BALL_STRIDE);
-buffer_exports!(trails_ptr, trails_len, out_trails, TRAIL_STRIDE);
+buffer_exports!(trails_ptr, trails_len, out_trails, SEG_STRIDE);
 buffer_exports!(rings_ptr, rings_len, out_rings, RING_STRIDE);
 buffer_exports!(particles_ptr, particles_len, out_particles, PARTICLE_STRIDE);
+buffer_exports!(walls_ptr, walls_len, out_walls, SEG_STRIDE);
+buffer_exports!(gems_ptr, gems_len, out_gems, GEM_STRIDE);
+buffer_exports!(powerups_ptr, powerups_len, out_powerups, POWERUP_STRIDE);
+buffer_exports!(lines_ptr, lines_len, out_lines, SEG_STRIDE);
 buffer_exports!(events_ptr, events_len, out_events, EVENT_STRIDE);

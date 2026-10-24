@@ -38,11 +38,88 @@ function osc(ctx: BaseAudioContext, type: OscillatorType, freq: number, when: nu
   return o;
 }
 
-/** Plays one note on the chosen instrument. Everything is synthesized, so there are no sample files. */
-export function playNote(ctx: BaseAudioContext, out: AudioNode, inst: Instrument, midi: number, when: number, vel: number): void {
+/** A user-supplied sound used as an instrument, re-pitched from its base note. */
+export interface SampleVoice {
+  buffer: AudioBuffer;
+  baseNote: number;
+}
+
+/** Plays one note on the chosen instrument. Built-in instruments are synthesized, so they need no files. */
+export function playNote(
+  ctx: BaseAudioContext, out: AudioNode, inst: Instrument, midi: number, when: number, vel: number, sample?: SampleVoice | null,
+): void {
   const f = mtof(midi);
   const v = Math.max(0.05, Math.min(1, vel));
   switch (inst) {
+    case 'sample': {
+      if (!sample) {
+        playNote(ctx, out, 'marimba', midi, when, vel);
+        break;
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = sample.buffer;
+      src.playbackRate.setValueAtTime(Math.pow(2, (midi - sample.baseNote) / 12), when);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.8 * v, when);
+      src.connect(g).connect(out);
+      src.start(when);
+      src.stop(when + Math.min(sample.buffer.duration, 4));
+      break;
+    }
+    case 'guitar': {
+      // Bright pluck through a body-like resonant filter.
+      const g = envelope(ctx, when, 0.3 * v, 1.1);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'lowpass';
+      bp.Q.value = 1.5;
+      bp.frequency.setValueAtTime(Math.min(f * 12, 14000), when);
+      bp.frequency.exponentialRampToValueAtTime(Math.max(f * 2, 300), when + 0.6);
+      g.connect(bp).connect(out);
+      osc(ctx, 'sawtooth', f, when, 1.1, g);
+      osc(ctx, 'triangle', f * 2, when, 1.1, g).detune.setValueAtTime(-6, when);
+      break;
+    }
+    case 'harp': {
+      const g = envelope(ctx, when, 0.38 * v, 1.8);
+      g.connect(out);
+      osc(ctx, 'triangle', f, when, 1.8, g);
+      const g2 = envelope(ctx, when, 0.1 * v, 0.6);
+      g2.connect(out);
+      osc(ctx, 'sine', f * 3, when, 0.6, g2);
+      break;
+    }
+    case 'musicbox': {
+      const g = envelope(ctx, when, 0.3 * v, 1.2);
+      g.connect(out);
+      osc(ctx, 'sine', f * 2, when, 1.2, g);
+      const g2 = envelope(ctx, when, 0.12 * v, 0.3);
+      g2.connect(out);
+      osc(ctx, 'sine', f * 6.5, when, 0.3, g2);
+      break;
+    }
+    case 'organ': {
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, when);
+      g.gain.linearRampToValueAtTime(0.16 * v, when + 0.02);
+      g.gain.setValueAtTime(0.16 * v, when + 0.32);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + 0.6);
+      g.connect(out);
+      for (const [mul, type] of [[1, 'sine'], [2, 'sine'], [3, 'sine'], [0.5, 'triangle']] as const) {
+        osc(ctx, type, f * mul, when, 0.6, g);
+      }
+      break;
+    }
+    case 'synth': {
+      const g = envelope(ctx, when, 0.14 * v, 0.6);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.Q.value = 6;
+      lp.frequency.setValueAtTime(Math.min(f * 16, 15000), when);
+      lp.frequency.exponentialRampToValueAtTime(Math.max(f * 2, 400), when + 0.4);
+      g.connect(lp).connect(out);
+      for (const d of [-9, 0, 9]) osc(ctx, 'sawtooth', f, when, 0.6, g).detune.setValueAtTime(d, when);
+      break;
+    }
     case 'marimba': {
       const g = envelope(ctx, when, 0.5 * v, 0.55);
       g.connect(out);
@@ -114,6 +191,27 @@ function playBreak(ctx: BaseAudioContext, out: AudioNode, when: number): void {
   src.connect(bp).connect(g).connect(out);
   src.start(when);
   src.stop(when + 0.45);
+}
+
+function playBoom(ctx: BaseAudioContext, out: AudioNode, when: number): void {
+  const src = ctx.createBufferSource();
+  src.buffer = noiseBuffer(ctx);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(1800, when);
+  lp.frequency.exponentialRampToValueAtTime(80, when + 1.2);
+  const g = envelope(ctx, when, 1.0, 1.4);
+  src.connect(lp).connect(g).connect(out);
+  src.start(when);
+  src.stop(when + 1.0);
+  const kick = envelope(ctx, when, 0.9, 0.5);
+  kick.connect(out);
+  const o = osc(ctx, 'sine', 120, when, 0.5, kick);
+  o.frequency.exponentialRampToValueAtTime(35, when + 0.4);
+}
+
+function playChime(ctx: BaseAudioContext, out: AudioNode, when: number, base: number): void {
+  [0, 7, 12].forEach((iv, i) => playNote(ctx, out, 'musicbox', base + iv, when + i * 0.05, 0.7));
 }
 
 function playWhoosh(ctx: BaseAudioContext, out: AudioNode, when: number): void {
@@ -207,8 +305,20 @@ export class SoundPlayer {
   private lastNote = -Infinity;
   private lastSfx = -Infinity;
 
-  constructor(private ctx: BaseAudioContext, private out: AudioNode, private cfg: Config) {
+  constructor(private ctx: BaseAudioContext, private out: AudioNode, private cfg: Config, private sample: SampleVoice | null = null) {
     this.picker = new NotePicker(cfg);
+  }
+
+  /** Advances the melody without making sound (used when seeking the preview). */
+  skip(events: SimEvent[]): void {
+    for (const e of events) {
+      if (e.kind === 'bounce' || e.kind === 'merge' || e.kind === 'break' || e.kind === 'gem' || (e.kind === 'hit' && this.cfg.ballHitSound)) {
+        if (e.t - this.lastNote >= this.cfg.minNoteGap) {
+          this.lastNote = e.t;
+          this.picker.next(e);
+        }
+      }
+    }
   }
 
   handle(e: SimEvent, when: number): void {
@@ -218,7 +328,7 @@ export class SoundPlayer {
     const notes = () => {
       if (when - this.lastNote < cfg.minNoteGap) return;
       this.lastNote = when;
-      for (const n of this.picker.next(e)) playNote(this.ctx, this.out, cfg.instrument, n, when, vel);
+      for (const n of this.picker.next(e)) playNote(this.ctx, this.out, cfg.instrument, n, when, vel, this.sample);
     };
     switch (e.kind) {
       case 'bounce':
@@ -241,20 +351,60 @@ export class SoundPlayer {
           playWhoosh(this.ctx, this.out, when);
         }
         break;
+      case 'gem':
+        notes();
+        if (cfg.sfx) playChime(this.ctx, this.out, when, cfg.baseNote + 24);
+        break;
+      case 'powerup':
+        if (cfg.sfx) playChime(this.ctx, this.out, when, cfg.baseNote + 12 + e.level * 2);
+        break;
+      case 'spike':
+        if (cfg.sfx && when - this.lastSfx > 0.05) {
+          this.lastSfx = when;
+          if (cfg.mode === 'accumulation') playNote(this.ctx, this.out, 'pop', cfg.baseNote + 7, when, 0.8);
+          else playBreak(this.ctx, this.out, when);
+        }
+        break;
+      case 'explode':
+        if (cfg.sfx) playBoom(this.ctx, this.out, when);
+        break;
       case 'finish':
         if (cfg.sfx) {
           const base = cfg.baseNote + cfg.transpose + 12;
-          [0, 4, 7, 12].forEach((iv, i) => playNote(this.ctx, this.out, cfg.instrument, base + iv, when + i * 0.09, 0.9));
+          [0, 4, 7, 12].forEach((iv, i) => playNote(this.ctx, this.out, cfg.instrument, base + iv, when + i * 0.09, 0.9, this.sample));
         }
         break;
     }
   }
 }
 
+/** The user's own sound file (kept in memory; persisted separately by the UI). */
+let userSample: { name: string; data: ArrayBuffer } | null = null;
+
+export function setUserSample(name: string, data: ArrayBuffer | null): void {
+  userSample = data ? { name, data } : null;
+}
+
+export function userSampleName(): string {
+  return userSample?.name ?? '';
+}
+
+async function decodeSample(ctx: BaseAudioContext, cfg: Config): Promise<SampleVoice | null> {
+  if (cfg.instrument !== 'sample' || !userSample) return null;
+  try {
+    // decodeAudioData detaches its input, so give it a copy.
+    const buffer = await ctx.decodeAudioData(userSample.data.slice(0));
+    return { buffer, baseNote: cfg.sampleBaseNote };
+  } catch (err) {
+    console.warn('Không giải mã được file âm thanh:', err);
+    return null;
+  }
+}
+
 /** Renders the whole soundtrack offline (much faster than real time) for export. */
 export async function renderSoundtrack(cfg: Config, events: SimEvent[], duration: number, sampleRate = 48000): Promise<AudioBuffer> {
   const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(duration * sampleRate)), sampleRate);
-  const player = new SoundPlayer(ctx, buildMaster(ctx, cfg), cfg);
+  const player = new SoundPlayer(ctx, buildMaster(ctx, cfg), cfg, await decodeSample(ctx, cfg));
   for (const e of events) if (e.t < duration) player.handle(e, e.t);
   return ctx.startRendering();
 }
@@ -269,10 +419,19 @@ export class LiveAudio {
     this.ctx = new AudioContext({ latencyHint: 'interactive' });
   }
 
-  reset(cfg: Config): void {
+  private generation = 0;
+
+  async reset(cfg: Config): Promise<void> {
+    const gen = ++this.generation;
+    const sample = await decodeSample(this.ctx, cfg);
+    if (gen !== this.generation) return;
     this.master?.disconnect();
     this.master = buildMaster(this.ctx, cfg);
-    this.player = new SoundPlayer(this.ctx, this.master, cfg);
+    this.player = new SoundPlayer(this.ctx, this.master, cfg, sample);
+  }
+
+  skip(events: SimEvent[]): void {
+    this.player?.skip(events);
   }
 
   /** Schedules events that happened at sim time e.t, given the sim time now. */

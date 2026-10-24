@@ -9,40 +9,102 @@
     <header>
       <h1>Ball Studio</h1>
       <div class="header-actions">
+        <button id="btn-undo" type="button" title="Hoàn tác (Ctrl+Z)" aria-label="Hoàn tác">↶</button>
+        <button id="btn-redo" type="button" title="Làm lại (Ctrl+Y)" aria-label="Làm lại">↷</button>
         <button id="btn-save" type="button">💾 Lưu preset</button>
         <label class="file-btn">📂 Mở preset<input id="file-preset" type="file" accept=".json,application/json" hidden /></label>
         <button id="btn-reset" type="button">↺ Mặc định</button>
+        <button id="btn-help" type="button">⌨ Phím tắt</button>
       </div>
       <span id="codec-status" class="codec">Đang kiểm tra bộ mã hóa…</span>
     </header>
     <main>
-      <aside id="panel"></aside>
+      <aside id="sidebar">
+        <section class="modes">
+          <div id="mode-grid" class="mode-grid" role="radiogroup" aria-label="Kiểu video"></div>
+          <div id="variants" class="variants"></div>
+        </section>
+        <input id="settings-filter" class="filter" type="search" placeholder="🔎 Tìm thiết lập… (vd: gai, màu, nhạc)" />
+        <div id="panel"></div>
+      </aside>
       <section class="stage">
-        <div id="canvas-wrap" class="canvas-wrap"></div>
-        <div class="toolbar">
-          <button id="btn-play" type="button">⏸ Tạm dừng</button>
-          <button id="btn-restart" type="button">⟲ Chạy lại</button>
-          <button id="btn-seed" type="button">🎲 Seed ngẫu nhiên</button>
-          <span id="stats" class="stats"></span>
-        </div>
-        <p class="hint">Bấm ▶/⟲ một lần để bật âm thanh xem trước (trình duyệt chặn tự phát tiếng).</p>
-        <div class="export">
-          <div class="export-row">
-            <button id="btn-export" type="button" class="primary">⬇ Xuất MP4</button>
-            <span class="batch">
-              <button id="btn-batch" type="button">Xuất hàng loạt</button>
-              <input id="batch-count" type="number" min="1" max="50" value="5" title="Số video (seed liên tiếp)" />
-              <span>video</span>
-            </span>
-            <button id="btn-cancel" type="button" hidden>✕ Hủy</button>
+        <div class="canvas-wrap">
+          <div id="canvas-box" class="canvas-box">
+            <div id="safe-overlay" class="safe-overlay" hidden>
+              <div class="sz sz-top"></div><div class="sz sz-bottom"></div><div class="sz sz-left"></div><div class="sz sz-right"></div>
+            </div>
           </div>
-          <div id="export-info" class="hint"></div>
-          <progress id="export-bar" value="0" max="1"></progress>
-          <div id="export-status" class="status"></div>
+        </div>
+        <div class="timeline">
+          <button id="btn-play" type="button" title="Phát / tạm dừng (Space)">⏸</button>
+          <button id="btn-restart" type="button" title="Chạy lại (R)">⟲</button>
+          <input id="scrub" type="range" min="0" max="30" step="0.0166667" value="0" aria-label="Tua thời gian" />
+          <span id="time-label" class="time">0:00.0</span>
+        </div>
+        <div class="toolbar">
+          <span class="seed">
+            Seed
+            <button id="seed-prev" type="button" title="Seed trước (←)">◀</button>
+            <input id="seed-input" type="number" min="0" step="1" aria-label="Seed" />
+            <button id="seed-next" type="button" title="Seed sau (→)">▶</button>
+            <button id="btn-seed" type="button" title="Seed ngẫu nhiên (N)">🎲</button>
+          </span>
+          <span id="stats" class="stats"></span>
+          <span id="renderer-badge" class="badge"></span>
+        </div>
+        <p id="audio-hint" class="hint">🔈 Bấm ▶ hoặc ⟲ một lần để bật tiếng xem trước (trình duyệt chặn tự phát tiếng).</p>
+        <div class="cards">
+          <div class="card">
+            <h3>⬇ Xuất video</h3>
+            <div class="export-row">
+              <button id="btn-export" type="button" class="primary">Xuất MP4</button>
+              <button id="btn-dual" type="button" title="Một lần bấm ra 2 file: bản TikTok/Reels và bản YouTube Shorts, mỗi bản né đúng vùng bị che">Xuất 2 bản TikTok + Shorts</button>
+              <span class="batch">
+                <button id="btn-batch" type="button">Xuất hàng loạt</button>
+                <input id="batch-count" type="number" min="1" max="50" value="5" title="Số video (seed liên tiếp)" aria-label="Số video" />
+                <span>video</span>
+              </span>
+              <button id="btn-cancel" type="button" hidden>✕ Hủy</button>
+            </div>
+            <div id="export-info" class="hint"></div>
+            <progress id="export-bar" value="0" max="1"></progress>
+            <div id="export-status" class="status"></div>
+          </div>
+          <div class="card">
+            <h3>🔍 Tìm seed tự động</h3>
+            <p class="hint">Thử hàng trăm/nghìn seed trong nền để tìm video kết thúc đúng thời lượng bạn cần, hoặc đúng lúc bài nhạc chơi hết.</p>
+            <div class="search-row">
+              <select id="search-kind" aria-label="Mục tiêu">
+                <option value="duration">Kết thúc sau (giây)</option>
+                <option value="notes">Khớp hết bài nhạc (số nốt)</option>
+              </select>
+              <input id="search-value" type="number" min="1" value="30" aria-label="Giá trị mục tiêu" />
+              <label class="inline">Thử <input id="search-count" type="number" min="10" max="20000" value="500" aria-label="Số seed" /> seed</label>
+              <button id="btn-search" type="button" class="primary">Tìm</button>
+              <button id="btn-search-stop" type="button" hidden>Dừng</button>
+            </div>
+            <progress id="search-bar" value="0" max="1"></progress>
+            <div id="search-status" class="status"></div>
+            <ol id="search-results" class="results"></ol>
+          </div>
         </div>
       </section>
     </main>
-    <div id="toast" class="toast" hidden></div>
+    <dialog id="help-dialog" class="help">
+      <h3>⌨ Phím tắt</h3>
+      <table>
+        <tr><td><kbd>Space</kbd></td><td>Phát / tạm dừng</td></tr>
+        <tr><td><kbd>R</kbd></td><td>Chạy lại từ đầu</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Seed trước / sau</td></tr>
+        <tr><td><kbd>N</kbd></td><td>Seed ngẫu nhiên</td></tr>
+        <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>Tua lùi / tới 1 giây</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Hoàn tác / làm lại</td></tr>
+        <tr><td><kbd>E</kbd></td><td>Xuất MP4</td></tr>
+        <tr><td><kbd>/</kbd></td><td>Tìm thiết lập</td></tr>
+      </table>
+      <form method="dialog"><button class="primary">Đóng</button></form>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
