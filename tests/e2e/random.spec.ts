@@ -1,4 +1,4 @@
-import { config, expect, openApp, quickExportSettings, saveDownload, test } from './helpers';
+import { config, expect, exportTest, openApp, quickExportSettings, saveDownload, test } from './helpers';
 
 async function setRange(page: import('@playwright/test').Page, min: number, max: number): Promise<void> {
   await page.fill('#rand-min', String(min));
@@ -65,6 +65,7 @@ test('English hooks and the G shortcut', async ({ page }) => {
 });
 
 test('make & export random videos in a batch', async ({ page }, info) => {
+  const wait = exportTest();
   await openApp(page);
   await quickExportSettings(page, 3);
   await setRange(page, 3, 5);
@@ -76,7 +77,7 @@ test('make & export random videos in a batch', async ({ page }, info) => {
     saved.push(saveDownload(d, info.outputDir));
   });
   await page.click('#btn-random-batch');
-  await expect.poll(() => names.length, { timeout: 115_000 }).toBe(2);
+  await expect.poll(() => names.length, { timeout: wait }).toBe(2);
   expect(names[0]).toMatch(/-random1\.mp4$/);
   expect(names[1]).toMatch(/-random2\.mp4$/);
   await Promise.all(saved);

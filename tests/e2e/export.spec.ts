@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import {
-  config, expect, mp4Boxes, mp4Tracks, openApp, quickExportSettings, saveDownload, setCheckbox, setSelect, test,
+  config, expect, exportTest, mp4Boxes, mp4Tracks, openApp, quickExportSettings, saveDownload, setCheckbox, setSelect, test,
 } from './helpers';
 
 function ffprobe(path: string): string | null {
@@ -13,9 +13,10 @@ function ffprobe(path: string): string | null {
 }
 
 test('exports a valid MP4 with video and audio', async ({ page }, info) => {
+  const wait = exportTest();
   await openApp(page);
   await quickExportSettings(page, 2);
-  const dl = page.waitForEvent('download', { timeout: 110_000 });
+  const dl = page.waitForEvent('download', { timeout: wait });
   await page.click('#btn-export');
   const path = await saveDownload(await dl, info.outputDir);
   expect(path).toMatch(/ball-escape-seed1\.mp4$/);
@@ -34,12 +35,13 @@ test('exports a valid MP4 with video and audio', async ({ page }, info) => {
 });
 
 test('exports with the CPU renderer and CPU encoder, without sound', async ({ page }, info) => {
+  const wait = exportTest();
   await openApp(page);
   await quickExportSettings(page, 1);
   await setSelect(page, 'renderer', 'cpu');
   await setSelect(page, 'encoder', 'cpu');
   await setCheckbox(page, 'sound', false);
-  const dl = page.waitForEvent('download', { timeout: 110_000 });
+  const dl = page.waitForEvent('download', { timeout: wait });
   await page.click('#btn-export');
   const path = await saveDownload(await dl, info.outputDir);
   expect(mp4Tracks(path)).toEqual(['vide']);
@@ -48,12 +50,13 @@ test('exports with the CPU renderer and CPU encoder, without sound', async ({ pa
 });
 
 test('dual export produces a TikTok and a Shorts file', async ({ page }, info) => {
+  const wait = exportTest();
   await openApp(page);
   await quickExportSettings(page, 1);
   const names: string[] = [];
   page.on('download', (d) => names.push(d.suggestedFilename()));
   await page.click('#btn-dual');
-  await expect.poll(() => names.length, { timeout: 110_000 }).toBe(2);
+  await expect.poll(() => names.length, { timeout: wait }).toBe(2);
   expect(names).toEqual(['ball-escape-seed1-tiktok.mp4', 'ball-escape-seed1-shorts.mp4']);
   void info;
 });

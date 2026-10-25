@@ -1,8 +1,9 @@
 name: CI
 
+# Manual only: run it from the Actions tab ("Run workflow").
+# To run on every push again, add back:  push:  and  pull_request:
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   test:

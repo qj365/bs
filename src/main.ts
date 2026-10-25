@@ -445,9 +445,11 @@ async function exporting(fn: () => Promise<void>): Promise<void> {
   cancelled = false;
   for (const id of EXPORT_BUTTONS) $<HTMLButtonElement>(id).disabled = true;
   $<HTMLButtonElement>('btn-cancel').hidden = false;
+  preview.setSuspended(true);
   try {
     await fn();
   } finally {
+    preview.setSuspended(false);
     for (const id of EXPORT_BUTTONS) $<HTMLButtonElement>(id).disabled = false;
     $<HTMLButtonElement>('btn-loop-export').disabled = !loopFound;
     $<HTMLButtonElement>('btn-cancel').hidden = true;

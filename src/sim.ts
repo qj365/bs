@@ -10,7 +10,8 @@ const P = {
   spikeArc: 26, spikeEffect: 27, spikeSize: 28, ringHp: 29, powerups: 30, powerupInterval: 31,
   impactLines: 32, explodeCount: 33, spiralTurns: 34, spiralSpeed: 35, gemCount: 36, impactMode: 37,
   portals: 38, portalSize: 39, magnet: 40, wind: 41, chaosCount: 42, chaos: 43,
-  teamCount: 43 + 8 * 3, teamHues: 43 + 8 * 3 + 1,
+  sides: 67, spikeGrow: 68, hero: 69, heroRadius: 70,
+  teamCount: 71, teamHues: 72,
 } as const;
 const MAX_TEAMS = 16;
 const MAX_CHAOS = 8;
@@ -28,7 +29,7 @@ const SPIKE_EFFECT_INDEX = { bounce: 0, destroy: 1, freeze: 2 } as const;
 // Floats per record — must match the *_STRIDE constants in lib.rs.
 export const BALL_STRIDE = 8;
 export const SEG_STRIDE = 8;
-export const RING_STRIDE = 12;
+export const RING_STRIDE = 16;
 export const PARTICLE_STRIDE = 6;
 export const GEM_STRIDE = 6;
 export const POWERUP_STRIDE = 6;
@@ -251,6 +252,10 @@ export class Simulation {
     params[P.spiralTurns] = cfg.spiralTurns;
     params[P.spiralSpeed] = cfg.spiralSpeed;
     params[P.gemCount] = cfg.gemCount;
+    params[P.sides] = cfg.arenaSides;
+    params[P.spikeGrow] = cfg.spikeGrow;
+    params[P.hero] = cfg.heroBall ? 1 : 0;
+    params[P.heroRadius] = cfg.heroRadius;
     params[P.portals] = cfg.portals ? 1 : 0;
     params[P.portalSize] = cfg.portalSize;
     params[P.magnet] = cfg.magnet;
@@ -363,7 +368,8 @@ export function counterValue(cfg: Config, st: Stats): string {
     case 'infinite':
       return String(st.inside);
     case 'accumulation':
-      return String(st.frozen);
+      // Stuck balls when spikes freeze them, otherwise how many are still alive.
+      return String(cfg.spikeEffect === 'freeze' ? st.frozen : st.inside);
     case 'collision':
       return String(st.alive);
     case 'spiral':

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import {
-  canvasInkRatio, config, decodePng, expect, mp4Boxes, mp4Tracks, openApp, openGroupOf, quickExportSettings, saveDownload,
+  canvasInkRatio, config, decodePng, expect, exportTest, mp4Boxes, mp4Tracks, openApp, openGroupOf, quickExportSettings, saveDownload,
   setCheckbox, setNumber, setSelect, simTime, test,
 } from './helpers';
 
@@ -35,8 +35,9 @@ async function downloads(page: Page, dir: string, count: number, fn: () => Promi
   const paths: Promise<string>[] = [];
   const handler = (d: import('@playwright/test').Download) => paths.push(saveDownload(d, dir));
   page.on('download', handler);
+  const wait = exportTest();
   await fn();
-  await expect.poll(() => paths.length, { timeout: 115_000 }).toBe(count);
+  await expect.poll(() => paths.length, { timeout: wait }).toBe(count);
   page.off('download', handler);
   return Promise.all(paths);
 }

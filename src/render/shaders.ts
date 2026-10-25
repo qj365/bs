@@ -29,6 +29,7 @@ layout(location = 0) in vec2 aCorner;
 layout(location = 1) in vec4 aA; // x y r hue (power-ups: x y r kind)
 layout(location = 2) in vec4 aB; // balls: px py bounces frozen | particles/gems: alpha mult | power-ups: life pulse
 uniform int uKind;               // 0 ball, 1 particle, 2 gem, 3 power-up
+uniform vec3 uHeroColor;
 uniform float uExtent;           // quad half-size in radii (bigger when glowing)
 out vec2 vLocal;
 out vec3 vColor;
@@ -41,9 +42,11 @@ void main() {
   float r = aA.z;
   vFrozen = 0.0;
   if (uKind == 0) {
-    vColor = ballColor(aA.w, aB.z);
+    // aB.w flags: 1 = stuck on a spike, 2 = the special "hero" ball.
+    bool hero = aB.w >= 2.0;
+    vColor = hero ? uHeroColor : ballColor(aA.w, aB.z);
     vAlpha = 1.0;
-    vFrozen = aB.w;
+    vFrozen = mod(aB.w, 2.0);
   } else if (uKind == 1) {
     vColor = uColorMode == 1 ? uSolid : hsl2rgb(mod(aA.w, 360.0), 0.9, 0.62);
     vAlpha = aB.x;
@@ -147,17 +150,19 @@ void main() {
 }
 `;
 
-/** Rotating rings with a gap and round end caps (matching the physics), spikes and glass. */
+/** Rotating rings or regular polygons with a gap, spikes and glass — matching the physics. */
 export const RING_VS = COMMON + /* glsl */ `
 layout(location = 0) in vec2 aCorner;
 layout(location = 1) in vec4 aA; // cx cy r thickness
 layout(location = 2) in vec4 aB; // rot gap hue flash
-layout(location = 3) in vec4 aC; // spikeCenter spikeArc glassFrac spikeSize
+layout(location = 3) in vec4 aC; // spikeCenter spikeArc glassFrac spikeLen
+layout(location = 4) in vec4 aD; // sides toothWidth - -
 uniform float uGlow;
 out vec2 vWorldPos;
 flat out vec4 vA;
 flat out vec4 vB;
 flat out vec4 vC;
+flat out vec4 vD;
 void main() {
   float ext = aA.z + aA.w * (0.5 + 2.5 * uGlow) + 2.0 / uPx;
   vec2 p = aA.xy + aCorner * ext;
@@ -165,6 +170,7 @@ void main() {
   vA = aA;
   vB = aB;
   vC = aC;
+  vD = aD;
   gl_Position = toClip(p);
 }
 `;
@@ -181,6 +187,7 @@ in vec2 vWorldPos;
 flat in vec4 vA;
 flat in vec4 vB;
 flat in vec4 vC;
+flat in vec4 vD;
 out vec4 o;
 vec3 hsl2rgb(float h, float s, float l) {
   vec3 k = clamp(abs(mod(h / 60.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
@@ -189,20 +196,38 @@ vec3 hsl2rgb(float h, float s, float l) {
 float hash(float n) { return fract(sin(n * 127.1) * 43758.5453); }
 const float PI = 3.14159265359;
 float wrapAngle(float a) { return mod(a + PI, 2.0 * PI) - PI; }
+vec2 rotate2(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
 void main() {
   vec2 p = vWorldPos - vA.xy;
   float R = vA.z, th = vA.w * 0.5;
   float rot = vB.x, gap = vB.y;
+  float sides = vD.x;
   float ang = atan(p.y, p.x);
   float len = length(p);
   float rel = wrapAngle(ang - rot);
-  float sd;
-  if (gap > 0.0 && abs(rel) < gap * 0.5) {
-    vec2 c1 = vec2(cos(rot + gap * 0.5), sin(rot + gap * 0.5)) * R;
-    vec2 c2 = vec2(cos(rot - gap * 0.5), sin(rot - gap * 0.5)) * R;
-    sd = min(length(p - c1), length(p - c2)) - th;
+
+  // dist: signed distance from the wall's centre line (positive = outside);
+  // radial: distance from the centre measured along the nearest wall normal;
+  // tang: coordinate along the wall (for spacing spike teeth).
+  float apo = R, radial = len, tang = 0.0;
+  if (sides >= 3.0) {
+    vec2 q = rotate2(p, -rot);
+    float stepA = 2.0 * PI / sides;
+    float k = floor(atan(q.y, q.x) / stepA + 0.5);
+    vec2 n = vec2(cos(k * stepA), sin(k * stepA));
+    apo = R * cos(PI / sides);
+    radial = dot(q, n);
+    tang = dot(q, vec2(-n.y, n.x)) + k * 2.0 * apo * tan(PI / sides);
   } else {
-    sd = abs(len - R) - th;
+    tang = (ang - rot) * R;
+  }
+  float sd = abs(radial - apo) - th;
+  if (gap > 0.0 && abs(rel) < gap * 0.5) {
+    // Gap with round caps at its two ends (on the wall line).
+    float edgeR = sides >= 3.0 ? apo / cos(gap * 0.5) : R;
+    vec2 c1 = vec2(cos(rot + gap * 0.5), sin(rot + gap * 0.5)) * edgeR;
+    vec2 c2 = vec2(cos(rot - gap * 0.5), sin(rot - gap * 0.5)) * edgeR;
+    sd = min(length(p - c1), length(p - c2)) - th;
   }
   vec3 col = uRainbow == 1 ? hsl2rgb(mod(vB.z + uTime * 40.0, 360.0), 0.9, 0.6) : uRingColor;
   float alphaMul = 1.0;
@@ -210,14 +235,14 @@ void main() {
   // Glass: translucent with a bright rim and cracks that multiply as it takes hits.
   float glass = vC.z;
   if (glass >= 0.0) {
-    float rim = 1.0 - smoothstep(0.0, th * 0.6, abs(abs(len - R) - th * 0.7));
+    float rim = 1.0 - smoothstep(0.0, th * 0.6, abs(abs(radial - apo) - th * 0.7));
     col = mix(col * 0.7 + 0.3, vec3(1.0), rim * 0.6);
     alphaMul = 0.55 + rim * 0.35;
     float cracks = floor((1.0 - glass) * 28.0);
     for (int k = 0; k < 28; k++) {
       if (float(k) >= cracks) break;
       float a = hash(float(k) + 1.0) * 2.0 * PI;
-      float wobble = (hash(float(k) + 7.0) - 0.5) * 0.04 * (len - R) / max(th, 1.0);
+      float wobble = (hash(float(k) + 7.0) - 0.5) * 0.04 * (radial - apo) / max(th, 1.0);
       float dist = abs(wrapAngle(ang - a - wobble)) * len * uPx;
       if (dist < 1.2) { col = vec3(1.0); alphaMul = 1.0; }
     }
@@ -226,15 +251,15 @@ void main() {
   float sdPx = sd * uPx;
   float core = 1.0 - smoothstep(-0.75, 0.75, sdPx);
 
-  // Spikes: triangular teeth pointing inward over the spike arc.
+  // Spikes: triangular teeth pointing inward over the spike arc; they can grow long.
   float spikes = 0.0;
-  if (vC.y > 0.0) {
+  if (vC.y > 0.0 && vC.w > 0.0) {
     float sr = wrapAngle(ang - vC.x);
     if (abs(sr) < vC.y * 0.5) {
-      float inner = R - th;
-      float depth = inner - len;
-      float u = (sr + vC.y * 0.5) * inner / vC.w;
-      float f = fract(u);
+      float inner = apo - th;
+      float depth = inner - radial;
+      float width = max(vD.y, 4.0);
+      float f = fract(tang / width);
       float tooth = vC.w * (1.0 - abs(2.0 * f - 1.0));
       float sdTooth = max(depth - tooth, -depth) * uPx;
       spikes = 1.0 - smoothstep(-0.75, 0.75, sdTooth);

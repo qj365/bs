@@ -66,7 +66,11 @@ const P_WIND: usize = 41;
 const P_CHAOS_COUNT: usize = 42;
 const P_CHAOS: usize = 43; // MAX_CHAOS × (time, kind, value)
 const MAX_CHAOS: usize = 8;
-const P_TEAM_COUNT: usize = P_CHAOS + MAX_CHAOS * 3;
+const P_SIDES: usize = P_CHAOS + MAX_CHAOS * 3;
+const P_SPIKE_GROW: usize = P_SIDES + 1;
+const P_HERO: usize = P_SIDES + 2;
+const P_HERO_RADIUS: usize = P_SIDES + 3;
+const P_TEAM_COUNT: usize = P_SIDES + 4;
 const P_TEAM_HUES: usize = P_TEAM_COUNT + 1; // MAX_TEAMS slots
 const PARAM_COUNT: usize = P_TEAM_HUES + MAX_TEAMS;
 
@@ -98,9 +102,9 @@ const WIND_SECONDS: f64 = 3.0;
 const PORTAL_COOLDOWN: f64 = 0.35;
 
 // Floats per record in the output buffers (mirrored in src/sim.ts).
-const BALL_STRIDE: usize = 8; // x y r hue px py bounces frozen
+const BALL_STRIDE: usize = 8; // x y r hue px py bounces flags(1 frozen, 2 hero)
 const SEG_STRIDE: usize = 8; // x1 y1 x2 y2 radius hue alpha bounces (trails, walls, impact lines)
-const RING_STRIDE: usize = 12; // cx cy r thickness rot gap hue flash spikeCenter spikeArc glassFrac spikeSize
+const RING_STRIDE: usize = 16; // cx cy r thickness rot gap hue flash spikeCenter spikeArc glassFrac spikeLen sides 0 0 0
 const PARTICLE_STRIDE: usize = 6; // x y size hue alpha 0
 const GEM_STRIDE: usize = 6; // x y size hue alpha mult
 const POWERUP_STRIDE: usize = 6; // x y r kind lifeFrac pulse
@@ -177,6 +181,8 @@ struct Ball {
     alive: bool,
     escaped: bool,
     frozen: bool,
+    /// The special ball (own size and colour).
+    hero: bool,
     /// Frozen balls ride along with their ring: angle relative to ring rotation, and distance.
     frozen_ring: usize,
     frozen_angle: f64,
@@ -214,6 +220,8 @@ struct Ring {
     alive: bool,
     hp: u32,
     hits: u32,
+    /// 0 = circle, otherwise a regular polygon with this many sides.
+    sides: u32,
 }
 
 /// A thick line segment in the spiral's local (unrotated) frame.
@@ -297,6 +305,10 @@ struct Params {
     portal_size: f64,
     magnet: f64,
     wind: f64,
+    sides: u32,
+    spike_grow: f64,
+    hero: bool,
+    hero_radius: f64,
     team_hues: Vec<f64>,
 }
 
@@ -418,6 +430,10 @@ impl Sim {
             portal_size: v[P_PORTAL_SIZE].clamp(8.0, 200.0),
             magnet: v[P_MAGNET],
             wind: v[P_WIND],
+            sides: { let n = v[P_SIDES] as u32; if n >= 3 { n.min(16) } else { 0 } },
+            spike_grow: v[P_SPIKE_GROW].max(0.0),
+            hero: v[P_HERO] != 0.0,
+            hero_radius: v[P_HERO_RADIUS].max(2.0),
             team_hues: v[P_TEAM_HUES..P_TEAM_HUES + team_count].to_vec(),
         };
         let seed = v[P_SEED];
@@ -505,6 +521,7 @@ impl Sim {
                     alive: true,
                     hp: self.p.ring_hp,
                     hits: 0,
+                    sides: self.p.sides,
                 });
             }
         }
@@ -551,6 +568,16 @@ impl Sim {
                 }
             }
         }
+        // The special ball: one big (or small) ball with its own colour among the others.
+        if self.p.hero && !matches!(self.p.mode, Mode::Koth | Mode::Collision | Mode::Spiral) {
+            let dir = self.rng.range(0.0, 2.0 * PI);
+            let s = self.p.initial_speed;
+            let r = self.p.hero_radius.min(rin * 0.6);
+            self.add_ball(cx, cy - rin * 0.25, dir.cos() * s, dir.sin() * s, r, 0.0, 0, u32::MAX);
+            if let Some(b) = self.pending.last_mut() {
+                b.hero = true;
+            }
+        }
         self.flush_pending();
     }
 
@@ -594,8 +621,8 @@ impl Sim {
 
     /// Radius of free space where balls start (inner surface of the innermost ring).
     fn arena_radius(&self) -> f64 {
-        if let Some(r) = self.rings.first() {
-            r.r - r.thickness * 0.5
+        if !self.rings.is_empty() {
+            self.inner_radius(0)
         } else if self.p.mode == Mode::Spiral {
             self.p.ring_radius
         } else {
@@ -611,9 +638,20 @@ impl Sim {
         }
     }
 
+    /// Radius of the largest circle that fits inside a ring (its apothem for polygons).
     fn inner_radius(&self, ri: usize) -> f64 {
         let r = &self.rings[ri];
-        r.r - r.thickness * 0.5
+        Self::ring_apothem(r) - r.thickness * 0.5
+    }
+
+    fn ring_apothem(r: &Ring) -> f64 {
+        if r.sides >= 3 { r.r * (PI / r.sides as f64).cos() } else { r.r }
+    }
+
+    /// Current spike length: spikes can grow over time, but never past 60% of the arena.
+    fn spike_len(&self) -> f64 {
+        let cap = if self.rings.is_empty() { self.p.ring_radius } else { self.inner_radius(0) } * 0.6;
+        (self.p.spike_size + self.p.spike_grow * self.time).min(cap)
     }
 
     fn rainbow_hue(&self) -> f64 {
@@ -640,6 +678,7 @@ impl Sim {
             alive: true,
             escaped: false,
             frozen: false,
+            hero: false,
             frozen_ring: 0,
             frozen_angle: 0.0,
             frozen_dist: 0.0,
@@ -1057,12 +1096,22 @@ impl Sim {
         let ring = self.rings[ri];
         let (cx, cy) = (self.p.cx, self.p.cy);
         let e = self.p.restitution;
-        let rin = ring.r - ring.thickness * 0.5;
+        let spike_arc = self.p.spike_arc;
+        let spike_center = Self::spike_center(&ring);
+        let spike_len = if spike_arc > 0.0 { self.spike_len() } else { 0.0 };
+        let in_spike = |a: f64| spike_arc > 0.0 && ang_diff(a, spike_center).abs() < spike_arc * 0.5;
         let mut bounced: Option<(f64, f64, f64)> = None; // (speed, contact x, contact y)
         let mut exited = false;
         let mut near_miss = false;
-        let mut contact_angle = 0.0;
-        {
+        let mut hit_spike = false;
+        if ring.sides >= 3 {
+            let r = self.collide_polygon(i, &ring, &in_spike, spike_len);
+            bounced = r.0;
+            exited = r.1;
+            near_miss = r.2;
+            hit_spike = r.3;
+        } else {
+            let rin = ring.r - ring.thickness * 0.5;
             let b = &mut self.balls[i];
             let dx = b.x - cx;
             let dy = b.y - cy;
@@ -1070,17 +1119,20 @@ impl Sim {
             let ang = dy.atan2(dx);
             let in_gap = ring.gap > 0.0 && ang_diff(ang, ring.rot).abs() < ring.gap * 0.5;
             if !in_gap {
-                if d + b.r > rin {
+                // Over the spikes the wall is effectively at the spike tips.
+                let spiky = in_spike(ang);
+                let limit = rin - if spiky { spike_len } else { 0.0 };
+                if d + b.r > limit {
                     let (nx, ny) = (dx / d, dy / d);
-                    let target = (rin - b.r).max(0.0);
+                    let target = (limit - b.r).max(0.0);
                     b.x = cx + nx * target;
                     b.y = cy + ny * target;
                     let vn = b.vx * nx + b.vy * ny;
                     if vn > 0.0 {
                         b.vx -= (1.0 + e) * vn * nx;
                         b.vy -= (1.0 + e) * vn * ny;
-                        bounced = Some((vn, cx + nx * rin, cy + ny * rin));
-                        contact_angle = ang;
+                        bounced = Some((vn, cx + nx * limit, cy + ny * limit));
+                        hit_spike = spiky;
                         // Hitting the wall right beside the gap reads as "so close!".
                         let margin = (2.0 * b.r / ring.r).max(0.1);
                         near_miss = ring.gap > 0.0 && ang_diff(ang, ring.rot).abs() < ring.gap * 0.5 + margin;
@@ -1106,7 +1158,7 @@ impl Sim {
                             b.vx -= (1.0 + e) * vn * nx;
                             b.vy -= (1.0 + e) * vn * ny;
                             bounced = Some((-vn, ex, ey));
-                            contact_angle = a;
+                            hit_spike = in_spike(a);
                             near_miss = true;
                         }
                     }
@@ -1124,9 +1176,8 @@ impl Sim {
             self.emit(EV_NEAR_MISS, 1.0, r, 0.0, 0.0, x);
         }
         if let Some((vn, px, py)) = bounced {
-            let on_spike = self.p.spike_arc > 0.0
-                && ang_diff(contact_angle, Self::spike_center(&ring)).abs() < self.p.spike_arc * 0.5;
-            if on_spike && self.p.spike_effect != SpikeEffect::Bounce {
+            // The special ball is the star of the video: spikes only bounce it.
+            if hit_spike && self.p.spike_effect != SpikeEffect::Bounce && !self.balls[i].hero {
                 self.on_spike(i, ri);
                 return;
             }
@@ -1135,6 +1186,65 @@ impl Sim {
         if exited {
             self.on_exit(i, ri);
         }
+    }
+
+    /// Ball against a rotating regular polygon. Each side is a wall at the apothem
+    /// (minus spikes where they are); the gap is cut out of the side facing `rot`.
+    /// Returns (bounce, exited, near miss, hit spikes).
+    fn collide_polygon(
+        &mut self, i: usize, ring: &Ring, in_spike: &dyn Fn(f64) -> bool, spike_len: f64,
+    ) -> (Option<(f64, f64, f64)>, bool, bool, bool) {
+        let (cx, cy) = (self.p.cx, self.p.cy);
+        let e = self.p.restitution;
+        let n = ring.sides as usize;
+        let step = 2.0 * PI / n as f64;
+        let apo = Self::ring_apothem(ring);
+        let ain = apo - ring.thickness * 0.5;
+        let b = &mut self.balls[i];
+        let (lx, ly) = rotate(b.x - cx, b.y - cy, -ring.rot);
+        let mut best: Option<(f64, f64, f64, f64, f64, bool, f64)> = None; // pen, nx, ny, qx, qy, spiky, qang
+        let mut max_dn = f64::NEG_INFINITY;
+        for k in 0..n {
+            let phi = k as f64 * step;
+            let (nx, ny) = (phi.cos(), phi.sin());
+            let dn = lx * nx + ly * ny;
+            max_dn = max_dn.max(dn);
+            // Where the ball would touch this side's inner face.
+            let (qx, qy) = (lx + nx * (ain - dn), ly + ny * (ain - dn));
+            let qang = qy.atan2(qx);
+            if ring.gap > 0.0 && ang_diff(qang, 0.0).abs() < ring.gap * 0.5 {
+                continue;
+            }
+            let spiky = in_spike(qang + ring.rot);
+            let limit = ain - if spiky { spike_len } else { 0.0 };
+            let pen = dn + b.r - limit;
+            if pen > 0.0 && best.map_or(true, |bb| pen > bb.0) {
+                best = Some((pen, nx, ny, qx - nx * (if spiky { spike_len } else { 0.0 }), qy - ny * (if spiky { spike_len } else { 0.0 }), spiky, qang));
+            }
+        }
+        let mut out = (None, false, false, false);
+        if let Some((pen, nx, ny, qx, qy, spiky, qang)) = best {
+            let (lx2, ly2) = (lx - nx * pen, ly - ny * pen);
+            let (wx, wy) = rotate(lx2, ly2, ring.rot);
+            b.x = cx + wx;
+            b.y = cy + wy;
+            let (nwx, nwy) = rotate(nx, ny, ring.rot);
+            let (qwx, qwy) = rotate(qx, qy, ring.rot);
+            // The wall moves with the rotation: bounce relative to it.
+            let w = ring.rot_speed;
+            let (vwx, vwy) = (-w * qwy, w * qwx);
+            let vn = (b.vx - vwx) * nwx + (b.vy - vwy) * nwy;
+            if vn > 0.0 {
+                b.vx -= (1.0 + e) * vn * nwx;
+                b.vy -= (1.0 + e) * vn * nwy;
+                let margin = (2.0 * b.r / ring.r).max(0.1);
+                let near = ring.gap > 0.0 && ang_diff(qang, 0.0).abs() < ring.gap * 0.5 + margin;
+                out = (Some((vn, cx + qwx, cy + qwy)), false, near, spiky);
+            }
+        } else if max_dn > apo + ring.thickness * 0.5 {
+            out.1 = true;
+        }
+        out
     }
 
     /// Spikes sit opposite the gap; on a closed ring they start at the top so the ball
@@ -1642,7 +1752,7 @@ impl Sim {
                 b.px as f32,
                 b.py as f32,
                 b.bounces as f32,
-                b.frozen as u32 as f32,
+                (b.frozen as u32 + 2 * b.hero as u32) as f32,
             ]);
             b.px = b.x;
             b.py = b.y;
@@ -1670,6 +1780,7 @@ impl Sim {
             }
         }
         let (cx, cy) = (self.p.cx as f32, self.p.cy as f32);
+        let spike_len = self.spike_len();
         for r in self.rings.iter().filter(|r| r.alive) {
             let glass = if r.hp > 0 { 1.0 - r.hits as f32 / r.hp as f32 } else { -1.0 };
             self.out_rings.extend_from_slice(&[
@@ -1684,7 +1795,11 @@ impl Sim {
                 Self::spike_center(r) as f32,
                 self.p.spike_arc as f32,
                 glass,
+                spike_len as f32,
+                r.sides as f32,
                 self.p.spike_size as f32,
+                0.0,
+                0.0,
             ]);
         }
         let rot = self.spiral_rot;

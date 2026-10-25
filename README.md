@@ -21,6 +21,10 @@ Công cụ tự làm video "bóng nảy" kiểu satisfying/ASMR cho TikTok, Shor
 | 🦋 Symmetric Drop | Các bóng lệch nhau 0.01px dẫn tới hỗn loạn |
 
 **Tùy chọn có thể bật ở mọi kiểu:**
+- **Hình dạng đấu trường:** tròn hoặc đa giác đều 3–12 cạnh (ví dụ thất giác 7 cạnh); vẫn có khe hở, xoay, gai, kính.
+- **Gai mọc dài dần** theo tốc độ tự chọn (px/giây); gai dài thì bóng chạm vào đầu gai sớm hơn.
+- **Bóng đặc biệt:** một bóng có cỡ và màu riêng (ví dụ bóng trắng to) giữa đám bóng nhỏ nhiều màu; bóng này miễn nhiễm với gai.
+- **Dòng chữ phụ phía dưới** (ví dụ "Did you recognize the music?"), có thể chọn thời điểm bắt đầu hiện.
 - **Gai:** chạm vào thì bóng vỡ tan hoặc dính lại.
 - **Vòng kính:** vỡ sau N lần va, có vết nứt lan dần.
 - **Vật phẩm:** nhân đôi, tăng tốc, to ra, nhỏ lại.
@@ -111,7 +115,7 @@ npm run test:e2e    # E2E test bằng Playwright (tự build và chạy server)
   - Xuất MP4 (kiểm tra cấu trúc file, track hình và track tiếng); xuất bằng CPU; xuất 2 bản; hủy khi đang xuất.
   - Tìm seed; renderer CPU.
 
-CI chạy tất cả các bước trên ở mỗi lần push (`.github/workflows/ci.yml`).
+CI (`.github/workflows/ci.yml`) hiện chỉ chạy khi bấm tay ở tab Actions ("Run workflow"). Muốn chạy ở mỗi lần push, thêm lại `push:` và `pull_request:` vào mục `on:`.
 
 ## Kiến trúc
 

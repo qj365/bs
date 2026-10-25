@@ -72,7 +72,7 @@ export class GpuRenderer implements FrameRenderer {
     if (!gl) throw new Error('Trình duyệt không hỗ trợ WebGL2.');
     this.gl = gl;
 
-    this.circle = this.program(CIRCLE_VS, CIRCLE_FS, ['uWorld', 'uPx', 'uColorMode', 'uSolid', 'uKind', 'uExtent', 'uGlow', 'uOutline']);
+    this.circle = this.program(CIRCLE_VS, CIRCLE_FS, ['uWorld', 'uPx', 'uColorMode', 'uSolid', 'uKind', 'uExtent', 'uGlow', 'uOutline', 'uHeroColor']);
     this.segment = this.program(SEGMENT_VS, SEGMENT_FS, ['uWorld', 'uPx', 'uColorMode', 'uSolid']);
     this.ring = this.program(RING_VS, RING_FS, ['uWorld', 'uPx', 'uGlow', 'uTime', 'uRainbow', 'uRingColor']);
     this.quad = this.program(QUAD_VS, QUAD_FS, ['uTex', 'uFlipY']);
@@ -95,7 +95,7 @@ export class GpuRenderer implements FrameRenderer {
       paint: this.instancedVao(b.paint, SEG_STRIDE, [4, 4]),
       wall: this.instancedVao(b.wall, SEG_STRIDE, [4, 4]),
       line: this.instancedVao(b.line, SEG_STRIDE, [4, 4]),
-      ring: this.instancedVao(b.ring, RING_STRIDE, [4, 4, 4]),
+      ring: this.instancedVao(b.ring, RING_STRIDE, [4, 4, 4, 4]),
       quad: gl.createVertexArray()!,
     };
     gl.bindVertexArray(this.vao.quad);
@@ -186,6 +186,7 @@ export class GpuRenderer implements FrameRenderer {
     if (p.u.uPx) gl.uniform1f(p.u.uPx, px);
     if (p.u.uColorMode) gl.uniform1i(p.u.uColorMode, COLOR_MODES[cfg.colorMode] ?? 0);
     if (p.u.uSolid) gl.uniform3f(p.u.uSolid, ...hexToRgb(cfg.ballColor));
+    if (p.u.uHeroColor) gl.uniform3f(p.u.uHeroColor, ...hexToRgb(cfg.heroColor));
   }
 
   private drawSegments(cfg: Config, vao: WebGLVertexArrayObject, buf: InstanceBuffer, data: Float32Array, count: number, solid?: [number, number, number]): void {

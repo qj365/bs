@@ -58,6 +58,11 @@ export interface Config {
   spiralTurns: number;
   spiralSpeed: number; // degrees / second
   gemCount: number;
+  arenaSides: number; // 0 = circle, 3–12 = regular polygon
+  spikeGrow: number; // spike length added per second
+  heroBall: boolean;
+  heroRadius: number;
+  heroColor: string;
   portals: boolean;
   portalSize: number;
   magnet: number;
@@ -102,6 +107,9 @@ export interface Config {
   counterLabel: string;
   showTimer: boolean;
   endText: string;
+  subtitle: string;
+  subtitleSize: number;
+  subtitleFrom: number; // seconds; 0 = always shown
   watermark: string;
   watermarkPos: Corner;
   watermarkOpacity: number;
@@ -169,6 +177,11 @@ export const DEFAULT_CONFIG: Config = {
   spiralTurns: 5,
   spiralSpeed: 90,
   gemCount: 12,
+  arenaSides: 0,
+  spikeGrow: 0,
+  heroBall: false,
+  heroRadius: 40,
+  heroColor: '#ffffff',
   portals: false,
   portalSize: 34,
   magnet: 0,
@@ -209,6 +222,9 @@ export const DEFAULT_CONFIG: Config = {
   counterLabel: 'Bóng: ',
   showTimer: false,
   endText: '',
+  subtitle: '',
+  subtitleSize: 44,
+  subtitleFrom: 0,
   watermark: '',
   watermarkPos: 'br',
   watermarkOpacity: 0.6,
@@ -252,7 +268,7 @@ export const DEFAULT_CONFIG: Config = {
 /** Extras that each mode starts without unless its own defaults turn them on. */
 const FEATURE_RESET: Partial<Config> = {
   spikeArc: 0, spikeEffect: 'destroy', ringHp: 0, powerups: false, impactLines: 0,
-  portals: false, magnet: 0, wind: 0, chaos: [],
+  portals: false, magnet: 0, wind: 0, chaos: [], spikeGrow: 0,
   paintTrail: false, ballCollisions: false, speedBoost: 1, restitution: 1,
 };
 
@@ -387,6 +403,16 @@ export const VARIANTS: Variant[] = [
   { id: 'grow-strings', mode: 'grow', label: 'Lớn dần + dây', overrides: { impactLines: 64, impactMode: 'chain', trailLength: 0 } },
   { id: 'destruction-glass', mode: 'destruction', label: 'Vòng kính', overrides: { gapAngle: 0, ringHp: 6, ringCount: 10, title: 'Mỗi vòng chịu 6 lần va' } },
   { id: 'destruction-fast', mode: 'destruction', label: 'Tăng tốc', overrides: { speedBoost: 1.01, ringCount: 20, ringSpacing: 18 } },
+  {
+    id: 'heptagon-grow', mode: 'accumulation', label: '7 cạnh + gai mọc',
+    overrides: {
+      arenaSides: 7, ringColor: '#ffffff', ringRainbow: false, ringThickness: 8, rotationSpeed: 18, glow: false,
+      spikeArc: 200, spikeEffect: 'destroy', spikeSize: 10, spikeGrow: 3, ringHp: 0,
+      heroBall: true, heroRadius: 44, heroColor: '#ffffff', ballRadius: 9, spawnInterval: 0.25, maxBalls: 300,
+      colorMode: 'rainbow', trailLength: 0, title: 'Gai mọc dài dần…', subtitle: 'Did you recognize the music?', subtitleFrom: 0,
+      counterLabel: 'Bóng: ', endText: '',
+    },
+  },
   { id: 'accumulation-many', mode: 'accumulation', label: 'Nhiều bóng', overrides: { spawnInterval: 0.35, ballRadius: 10, ringHp: 150 } },
   { id: 'collision-mega', mode: 'collision', label: 'Nổ 1000 bóng', overrides: { explodeCount: 1000, ballCollisions: false } },
   { id: 'spiral-fast', mode: 'spiral', label: 'Xoắn nhanh', overrides: { spiralSpeed: 160, spiralTurns: 7, gemCount: 20 } },

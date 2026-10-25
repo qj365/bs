@@ -180,6 +180,69 @@ describe('timeline events, portals, forces', () => {
   });
 });
 
+describe('polygon arenas, growing spikes, special ball', () => {
+  for (const sides of [3, 4, 7, 12]) {
+    it(`balls stay inside a rotating ${sides}-sided arena`, async () => {
+      const cfg = modeConfig('escape', { arenaSides: sides, gapAngle: 0, spawnOnEscape: 0, rotationSpeed: 90, initialBalls: 6 });
+      const { sim, stats } = await run(cfg, 20);
+      expect(stats.inside).toBe(6);
+      const d = sim.renderData(0);
+      const apo = cfg.ringRadius * Math.cos(Math.PI / sides);
+      for (let i = 0; i < d.ballCount; i++) {
+        const dist = Math.hypot(d.balls[i * 8] - sim.layout.cx, d.balls[i * 8 + 1] - sim.layout.cy);
+        expect(dist).toBeLessThan(cfg.ringRadius);
+        expect(dist).toBeGreaterThanOrEqual(0);
+      }
+      expect(d.rings[12]).toBe(sides);
+      void apo;
+    });
+  }
+
+  it('a heptagon with a gap lets the ball escape', async () => {
+    const { stats } = await run(modeConfig('escape', { arenaSides: 7, gapAngle: 45, spawnOnEscape: 0 }), 120, { stopOnFinish: true });
+    expect(stats.finished).toBe(true);
+  });
+
+  it('spikes grow over time and are reported to the renderer', async () => {
+    const cfg = modeConfig('escape', { spikeArc: 90, spikeSize: 6, spikeGrow: 5, spikeEffect: 'bounce', spawnOnEscape: 0 });
+    const a = await run(cfg, 2);
+    const lenEarly = a.sim.renderData(0).rings[11];
+    const b = await run(cfg, 12);
+    const lenLate = b.sim.renderData(0).rings[11];
+    expect(lenEarly).toBeCloseTo(6 + 5 * 2, 0);
+    expect(lenLate).toBeCloseTo(6 + 5 * 12, 0);
+  });
+
+  it('long spikes are hit earlier (at their tips)', async () => {
+    const base = { spikeArc: 360, spikeEffect: 'destroy' as const, gapAngle: 0, spawnOnEscape: 0, growAmount: 0 };
+    const short = await run(modeConfig('grow', { ...base, spikeSize: 2, spikeGrow: 0 }), 30, { stopOnFinish: true });
+    const long = await run(modeConfig('grow', { ...base, spikeSize: 2, spikeGrow: 60 }), 30, { stopOnFinish: true });
+    expect(short.stats.finished && long.stats.finished).toBe(true);
+    expect(long.stats.finishTime).toBeLessThanOrEqual(short.stats.finishTime);
+  });
+
+  it('the special ball spawns with its own size and flag', async () => {
+    const cfg = variantConfig('heptagon-grow');
+    const { sim } = await run(cfg, 3);
+    const d = sim.renderData(0);
+    let heroes = 0;
+    for (let i = 0; i < d.ballCount; i++) {
+      if (d.balls[i * 8 + 7] >= 2) {
+        heroes++;
+        expect(d.balls[i * 8 + 2]).toBeCloseTo(cfg.heroRadius, 3);
+      }
+    }
+    expect(heroes).toBe(1);
+    expect(d.ballCount).toBeGreaterThan(5);
+  });
+
+  it('the reel-style variant runs a full minute with spikes popping balls', async () => {
+    const { events, sim } = await run(variantConfig('heptagon-grow'), 60);
+    expect(events.some((e) => e.kind === 'spike')).toBe(true);
+    expect(sim.renderData(0).rings[11]).toBeGreaterThan(100);
+  });
+});
+
 describe('determinism', () => {
   const signature = (events: { t: number; kind: string; strength: number }[]) =>
     events.map((e) => `${e.t.toFixed(5)}:${e.kind}:${e.strength.toFixed(3)}`).join('|');

@@ -45,8 +45,9 @@ export class Hud {
       const p = s.powerups!;
       if (p[o + 3] < 4) icons.push(Math.round(p[o]), Math.round(p[o + 1]), Math.round(p[o + 2]), p[o + 3]);
     }
+    const subtitle = cfg.subtitle.trim() && s.time >= cfg.subtitleFrom ? cfg.subtitle.trim() : '';
     const key = [
-      cfg.title, cfg.titleSize, cfg.textColor, counter, timer, s.end, cfg.ringRadius,
+      cfg.title, cfg.titleSize, cfg.textColor, counter, timer, s.end, cfg.ringRadius, subtitle, cfg.subtitleSize,
       cfg.watermark, cfg.watermarkPos, cfg.watermarkOpacity, layout.cy, icons.join(','), s.banner ?? '', s.overlay ?? '',
     ].join('\u0001');
     if (key === this.key) return;
@@ -59,7 +60,7 @@ export class Hud {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
-    this.empty = !cfg.title && !counter && !timer && !s.end && !cfg.watermark && icons.length === 0 && !s.banner && !s.overlay;
+    this.empty = !cfg.title && !counter && !timer && !s.end && !cfg.watermark && icons.length === 0 && !s.banner && !s.overlay && !subtitle;
     const midX = ((layout.safe.left + layout.W - layout.safe.right) / 2) * k;
 
     const size = cfg.titleSize * k;
@@ -90,6 +91,20 @@ export class Hud {
     if (timer) {
       ctx.font = `700 ${small * 0.8}px ${FONT_FAMILY}`;
       this.outlined(timer, midX, Math.min(y, bottomLimit - small), small * 0.8, cfg.textColor);
+    }
+
+    if (subtitle) {
+      // Secondary line near the bottom, kept clear of the app UI in safe-zone layouts.
+      const ss = cfg.subtitleSize * k;
+      ctx.font = `700 ${ss}px ${FONT_FAMILY}`;
+      const lines = wrap(ctx, subtitle, (layout.W - layout.safe.left - layout.safe.right) * 0.9 * k);
+      const lineH = ss * 1.2;
+      let sy = Math.max(y + ss, bottomLimit - ss * 1.2 - (lines.length - 1) * lineH);
+      sy = Math.min(sy, bottomLimit - ss * 0.8 - (lines.length - 1) * lineH);
+      for (const line of lines) {
+        this.outlined(line, midX, sy, ss, cfg.textColor);
+        sy += lineH;
+      }
     }
 
     for (let i = 0; i < icons.length; i += 4) {

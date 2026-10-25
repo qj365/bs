@@ -78,6 +78,15 @@ export async function openGroupOf(page: Page, key: string): Promise<void> {
   }, key);
 }
 
+/**
+ * Marks a test as video-exporting: triples its timeout (software encoding on a
+ * 2-core CI runner is slow) and returns how long to wait for downloads.
+ */
+export function exportTest(): number {
+  test.slow();
+  return test.info().timeout - 10_000;
+}
+
 /** Small settings make exports quick in a GPU-less CI browser. */
 export async function quickExportSettings(page: Page, seconds = 2, extras = false): Promise<void> {
   await setSelect(page, 'resolution', '720x1280');

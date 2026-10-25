@@ -35,6 +35,7 @@ export class Preview {
   private warp: Warp | null = null;
   private maxTime = Infinity;
   private musicPlaying = false;
+  private suspended = false;
 
   constructor(
     private box: HTMLElement,
@@ -141,6 +142,18 @@ export class Preview {
     }
   }
 
+  /**
+   * While a video is being exported the preview stops drawing, so the exporter gets
+   * all the CPU/GPU time (makes exports noticeably faster on modest machines).
+   */
+  setSuspended(on: boolean): void {
+    this.suspended = on;
+    this.box.classList.toggle('suspended', on);
+    if (on) this.audio?.stopMusic();
+    else if (this.playing) void this.syncMusic();
+    this.lastTs = 0;
+  }
+
   setPlaying(p: boolean): void {
     this.playing = p;
     void this.syncMusic();
@@ -182,7 +195,7 @@ export class Preview {
   private frame(ts: number): void {
     requestAnimationFrame((t) => this.frame(t));
     const scene = this.scene;
-    if (!scene) return;
+    if (!scene || this.suspended) return;
     const cfg = this.getCfg();
     const dt = Math.min((ts - (this.lastTs || ts)) / 1000, 0.1);
     this.lastTs = ts;
