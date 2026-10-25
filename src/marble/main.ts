@@ -7,9 +7,11 @@ import { Panel } from '../ui/panel';
 import { idbGet, idbSet, lsGet, lsSet } from '../ui/storage';
 import { MarbleLiveAudio } from './audio';
 import { buildCourse, type Course } from './choreo';
-import { courseOptions, DEFAULT_MARBLE, midiToNotes, sanitizeMarble, songNotes, type MarbleConfig, type MidiSong } from './config';
+import { applyTheme, courseOptions, DEFAULT_MARBLE, midiToNotes, sanitizeMarble, songNotes, type MarbleConfig, type MidiSong } from './config';
 import { startMarbleExport, type MarbleExportJob } from './exporter';
+import { randomMarble } from './random';
 import { MARBLE_GROUPS } from './schema';
+import { Rng } from '../rng';
 import { drawMarbleText, MarbleScene } from './scene3d';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -118,12 +120,20 @@ function loop(now: number): void {
 }
 let needsDraw = true;
 
-const LOOK_KEYS = new Set<keyof MarbleConfig>(['bgColor', 'fog', 'barColor', 'playedColor', 'ballColor', 'stripeColor', 'light', 'shadows', 'flash', 'cameraDistance']);
+const LOOK_KEYS = new Set<keyof MarbleConfig>([
+  'bgColor', 'fog', 'barColor', 'playedColor', 'ballColor', 'stripeColor', 'light', 'shadows', 'flash', 'cameraDistance',
+  'barStyle', 'colorMode', 'ballStyle', 'backdrop', 'theme',
+]);
 
 const panel = new Panel<MarbleConfig>($('panel'), cfg, {
   onChange(key, live) {
     save();
     if (key === 'seed') $<HTMLInputElement>('seed-input').value = String(cfg.seed);
+    if (key === 'theme') {
+      applyTheme(cfg, cfg.theme);
+      save();
+      panel.refresh();
+    }
     if (key === 'resolution') sizeCanvases();
     if (key === 'title' || key === 'titleSize' || key === 'subtitle' || key === 'subtitleSize' || key === 'textColor' || key === 'resolution') drawText();
     if (key === 'lowInstrument' || key === 'highInstrument' || key === 'volume' || key === 'reverb') audio?.reset(cfg);
@@ -232,15 +242,18 @@ $<HTMLInputElement>('settings-filter').addEventListener('input', (e) => panel.se
 
 // ---------------------------------------------------------------- export
 
-$('btn-export').addEventListener('click', () => {
-  if (job) return;
+$('btn-export').addEventListener('click', () => void exportCurrent());
+
+/** Exports the current config; resolves to false if it failed or was cancelled. */
+async function exportCurrent(label = ''): Promise<boolean> {
+  if (job) return false;
   const notes = songNotes(cfg, midi);
   const from = Math.max(0, Number($<HTMLInputElement>('clip-from').value) || 0);
   const toRaw = Number($<HTMLInputElement>('clip-to').value) || 0;
   const to = toRaw > from ? Math.min(toRaw, duration()) : duration();
   if (to - from < 0.1) {
     toast('Đoạn xuất quá ngắn');
-    return;
+    return false;
   }
   const bar = $<HTMLProgressElement>('export-bar');
   const status = $('export-status');
@@ -250,23 +263,58 @@ $('btn-export').addEventListener('click', () => {
   const started = performance.now();
   job = startMarbleExport(cfg, notes, { start: from, end: to }, (frame, total, fps, text) => {
     bar.value = frame / total;
-    status.textContent = fps > 0 ? `${text} · ${frame}/${total} khung · ${fps.toFixed(0)} khung/giây` : text;
+    status.textContent = label + (fps > 0 ? `${text} · ${frame}/${total} khung · ${fps.toFixed(0)} khung/giây` : text);
   });
-  job.promise.then((res) => {
-    const name = `marble-${cfg.song}-${cfg.seed}.mp4`;
+  return job.promise.then((res) => {
+    const name = `marble-${cfg.theme}-${cfg.layout}-${cfg.song}-${cfg.seed}.mp4`;
     download(res.blob, name);
     bar.value = 1;
     status.textContent = `✅ ${name} · ${res.duration.toFixed(1)} giây · ${(res.blob.size / 1e6).toFixed(1)} MB · ${res.video}${res.audio ? ' + ' + res.audio : ''} · mất ${((performance.now() - started) / 1000).toFixed(1)} giây`;
     document.body.dataset.exported = String(res.blob.size);
+    return true;
   }).catch((err: Error) => {
     status.textContent = '❌ ' + err.message;
+    return false;
   }).finally(() => {
     job = null;
     $('btn-export').removeAttribute('disabled');
     $('btn-cancel').hidden = true;
   });
+}
+
+// ---------------------------------------------------------------- random
+
+let batchStop = false;
+
+function randomize(): void {
+  const locks = {
+    music: $<HTMLInputElement>('lock-music').checked,
+    look: $<HTMLInputElement>('lock-look').checked,
+    text: $<HTMLInputElement>('lock-text').checked,
+  };
+  const lang = $<HTMLSelectElement>('rand-lang').value as 'vi' | 'en';
+  const rng = new Rng((Math.random() * 2 ** 31) >>> 0);
+  applyConfig(randomMarble(cfg, rng, locks, lang, !!midi));
+  const theme = $('panel').querySelector<HTMLSelectElement>('.row[data-key="theme"] select');
+  $('random-status').textContent = `🎲 ${theme?.selectedOptions[0]?.textContent ?? cfg.theme} · ${cfg.layout} · camera ${cfg.cameraMode} · ${cfg.song} ${cfg.bpm} BPM · seed ${cfg.seed}`;
+}
+
+$('btn-random').addEventListener('click', randomize);
+$('btn-random-batch').addEventListener('click', async () => {
+  const n = Math.max(1, Math.min(50, Number($<HTMLInputElement>('random-count').value) || 1));
+  batchStop = false;
+  $('btn-random-batch').setAttribute('disabled', '');
+  for (let i = 0; i < n && !batchStop; i++) {
+    randomize();
+    const ok = await exportCurrent(`Video ${i + 1}/${n} · `);
+    if (!ok) break;
+  }
+  $('btn-random-batch').removeAttribute('disabled');
 });
-$('btn-cancel').addEventListener('click', () => job?.cancel());
+$('btn-cancel').addEventListener('click', () => {
+  batchStop = true;
+  job?.cancel();
+});
 
 // ---------------------------------------------------------------- keys
 
@@ -276,6 +324,8 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
     e.preventDefault();
     setPlaying(!playing);
+  } else if (e.key === 'g' || e.key === 'G') {
+    randomize();
   } else if (e.key === 'r' || e.key === 'R') {
     time = 0;
     setPlaying(true);

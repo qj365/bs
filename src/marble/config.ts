@@ -1,6 +1,14 @@
 import type { Backend, Instrument } from '../config';
 import { MELODIES } from '../audio/melodies';
-import { DEFAULT_COURSE, stepsToNotes, type MarbleNote } from './choreo';
+import { DEFAULT_COURSE, stepsToNotes, type CourseLayout, type CourseOptions, type MarbleNote } from './choreo';
+
+export type BarStyle = 'wood' | 'plain' | 'glass' | 'metal' | 'neon';
+/** played: one colour until hit, another after · pitch: rainbow by note · random: random colour per bar */
+export type ColorMode = 'played' | 'pitch' | 'random';
+export type BallStyle = 'steel' | 'gold' | 'glass' | 'glow' | 'plastic';
+/** side: classic view · top: looking down the shaft · orbit: slowly circles the ball · close: low and near */
+export type CameraMode = 'side' | 'top' | 'orbit' | 'close';
+export type Backdrop = 'wall' | 'void';
 
 /** Settings for the 3D marble music machine. */
 export interface MarbleConfig {
@@ -19,7 +27,16 @@ export interface MarbleConfig {
   rollGap: number;
   restGap: number;
   splitPitch: number;
+  layout: CourseLayout;
 
+  /** Last applied theme (for the UI). */
+  theme: string;
+  barStyle: BarStyle;
+  colorMode: ColorMode;
+  ballStyle: BallStyle;
+  cameraMode: CameraMode;
+  backdrop: Backdrop;
+  sparks: boolean;
   bgColor: string;
   fog: number;
   /** Bars not played yet. */
@@ -69,6 +86,14 @@ export const DEFAULT_MARBLE: MarbleConfig = {
   rollGap: DEFAULT_COURSE.rollGap,
   restGap: DEFAULT_COURSE.restGap,
   splitPitch: DEFAULT_COURSE.splitPitch,
+  layout: 'zigzag',
+  theme: 'classic',
+  barStyle: 'wood',
+  colorMode: 'played',
+  ballStyle: 'steel',
+  cameraMode: 'side',
+  backdrop: 'wall',
+  sparks: false,
   bgColor: '#3a4458',
   fog: 0.45,
   barColor: '#ffa515',
@@ -125,7 +150,7 @@ export function songNotes(cfg: MarbleConfig, midi: MidiSong | null): MarbleNote[
   return out;
 }
 
-export function courseOptions(cfg: MarbleConfig) {
+export function courseOptions(cfg: MarbleConfig): Partial<CourseOptions> {
   return {
     seed: cfg.seed,
     gravity: cfg.gravity,
@@ -134,6 +159,7 @@ export function courseOptions(cfg: MarbleConfig) {
     rollGap: cfg.rollGap,
     restGap: cfg.restGap,
     splitPitch: cfg.splitPitch,
+    layout: cfg.layout,
   };
 }
 
@@ -162,4 +188,51 @@ export function midiToNotes(notes: { time: number; midi: number }[]): MarbleNote
     }
   }
   return out;
+}
+
+/** Ready-made looks; each only sets visual keys, so the song and course stay. */
+export const MARBLE_THEMES: { id: string; label: string; overrides: Partial<MarbleConfig> }[] = [
+  {
+    id: 'classic', label: '🟧 Cổ điển (cam → trắng)',
+    overrides: { barStyle: 'wood', colorMode: 'played', barColor: '#ffa515', playedColor: '#f4f4f2', bgColor: '#3a4458', holderColor: '#101216', ballStyle: 'steel', ballColor: '#555a63', stripeColor: '#d8262c', backdrop: 'wall', fog: 0.45, light: 1, sparks: false },
+  },
+  {
+    id: 'neon', label: '🌃 Neon đêm',
+    overrides: { barStyle: 'neon', colorMode: 'pitch', bgColor: '#07060f', holderColor: '#2a2a3a', ballStyle: 'glow', ballColor: '#ffffff', stripeColor: '#00e5ff', backdrop: 'void', fog: 0.55, light: 0.7, sparks: true },
+  },
+  {
+    id: 'crystal', label: '💎 Pha lê',
+    overrides: { barStyle: 'glass', colorMode: 'pitch', bgColor: '#1b2a3c', holderColor: '#c8d4e4', ballStyle: 'steel', ballColor: '#d8dde6', stripeColor: '#7fd7ff', backdrop: 'wall', fog: 0.4, light: 1.2, sparks: true },
+  },
+  {
+    id: 'candy', label: '🍬 Kẹo ngọt',
+    overrides: { barStyle: 'plain', colorMode: 'random', bgColor: '#f7c6dc', holderColor: '#ffffff', ballStyle: 'plastic', ballColor: '#ff4f8b', stripeColor: '#ffffff', backdrop: 'wall', fog: 0.3, light: 1.2, sparks: false },
+  },
+  {
+    id: 'gold', label: '🏆 Vàng kim',
+    overrides: { barStyle: 'metal', colorMode: 'played', barColor: '#d9a21b', playedColor: '#fff2c2', bgColor: '#17120d', holderColor: '#2b2118', ballStyle: 'gold', ballColor: '#e0b030', stripeColor: '#1a1a1a', backdrop: 'wall', fog: 0.5, light: 1.1, sparks: true },
+  },
+  {
+    id: 'ocean', label: '🌊 Đại dương',
+    overrides: { barStyle: 'glass', colorMode: 'played', barColor: '#36c2ff', playedColor: '#e6fbff', bgColor: '#0a2b40', holderColor: '#0b1a26', ballStyle: 'glass', ballColor: '#bdefff', stripeColor: '#ffffff', backdrop: 'void', fog: 0.6, light: 1, sparks: false },
+  },
+  {
+    id: 'forest', label: '🌲 Rừng gỗ',
+    overrides: { barStyle: 'wood', colorMode: 'played', barColor: '#8cc152', playedColor: '#f6efd9', bgColor: '#1d3123', holderColor: '#2b1d12', ballStyle: 'steel', ballColor: '#6b6f74', stripeColor: '#e8b23a', backdrop: 'wall', fog: 0.5, light: 1, sparks: false },
+  },
+  {
+    id: 'rainbow', label: '🌈 Cầu vồng',
+    overrides: { barStyle: 'wood', colorMode: 'pitch', bgColor: '#2c2f3a', holderColor: '#101216', ballStyle: 'steel', ballColor: '#8a909a', stripeColor: '#ffffff', backdrop: 'wall', fog: 0.45, light: 1.05, sparks: false },
+  },
+  {
+    id: 'sunset', label: '🌅 Hoàng hôn',
+    overrides: { barStyle: 'plain', colorMode: 'played', barColor: '#ff6a3d', playedColor: '#ffe3b8', bgColor: '#3d1f3f', holderColor: '#1a0f1c', ballStyle: 'gold', ballColor: '#ffcf6e', stripeColor: '#7a1f4f', backdrop: 'void', fog: 0.5, light: 1, sparks: true },
+  },
+];
+
+export function applyTheme(cfg: MarbleConfig, id: string): void {
+  const theme = MARBLE_THEMES.find((t) => t.id === id);
+  if (!theme) return;
+  Object.assign(cfg, theme.overrides);
+  cfg.theme = id;
 }

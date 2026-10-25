@@ -30,9 +30,17 @@ export interface CourseOptions {
   /** Seconds of free fall before the first note and after the last. */
   lead: number;
   tail: number;
-  /** Notes at or above this MIDI pitch use white (glockenspiel) bars, below are wooden. */
+  /** Notes at or above this MIDI pitch use the second instrument. */
   splitPitch: number;
+  /** How the bounce points are laid out. */
+  layout: CourseLayout;
 }
+
+/**
+ * zigzag: two columns, the ball bounces left/right · spiral: bars wind around the
+ * shaft · scatter: bars float at random spots · stairs: every phrase is a rolling row.
+ */
+export type CourseLayout = 'zigzag' | 'spiral' | 'scatter' | 'stairs';
 
 export const DEFAULT_COURSE: CourseOptions = {
   seed: 1,
@@ -45,6 +53,7 @@ export const DEFAULT_COURSE: CourseOptions = {
   lead: 0.9,
   tail: 2.5,
   splitPitch: 72,
+  layout: 'zigzag',
 };
 
 export type BarKind = 'wood' | 'white';
@@ -178,11 +187,27 @@ export function buildCourse(input: MarbleNote[], options: Partial<CourseOptions>
   let pendingBar: { bar: Bar; vIn: Vec3 } | null = null;
 
   /** Where the next bounce on alternating sides should be. */
+  let angle = rng.next() * Math.PI * 2;
+  const spin = (rng.next() < 0.5 ? -1 : 1) * (0.9 + rng.next() * 0.5);
   const nextBouncePoint = (dt: number): Vec3 => {
     side = -side;
+    const y = pos[1] - Math.max(0.18, o.descent * dt * (0.85 + 0.3 * rng.next()));
+    if (o.layout === 'spiral') {
+      angle += spin;
+      const r = o.width * 1.15;
+      return [Math.cos(angle) * r, y, Math.sin(angle) * r];
+    }
+    if (o.layout === 'scatter') {
+      // Random spot in a disc, but always a clear jump away from the last bar.
+      for (let k = 0; k < 12; k++) {
+        const a = rng.next() * Math.PI * 2;
+        const r = o.width * (0.4 + rng.next() * 1.1);
+        const p: Vec3 = [Math.cos(a) * r, y, Math.sin(a) * r * 0.8];
+        if (Math.hypot(p[0] - pos[0], p[2] - pos[2]) > o.width * 0.8 || k === 11) return p;
+      }
+    }
     const x = side * o.width * (0.78 + 0.22 * rng.next());
     const z = (rng.next() - 0.5) * 0.5;
-    const y = pos[1] - Math.max(0.18, o.descent * dt * (0.85 + 0.3 * rng.next()));
     return [x, y, z];
   };
 
@@ -221,7 +246,8 @@ export function buildCourse(input: MarbleNote[], options: Partial<CourseOptions>
 
   let heading: number | null = null;
   const turn = rng.next() < 0.5 ? -1 : 1;
-  const groups = plan(notes, o.rollGap);
+  // Stairs: phrases (notes up to 0.8 s apart) all become rolling rows.
+  const groups = plan(notes, o.layout === 'stairs' ? Math.max(o.rollGap, 0.8) : o.rollGap);
   for (let gi = 0; gi < groups.length; gi++) {
     const grp = groups[gi];
     const first = notes[grp.first];
@@ -270,8 +296,9 @@ export function buildCourse(input: MarbleNote[], options: Partial<CourseOptions>
     // A rolling row: land on a rail and roll across bars spaced by the note timing.
     const last = notes[grp.last];
     const runTime = last.t - first.t;
-    const landing = nextBouncePoint(first.t - time);
-    flyTo(landing, first.t);
+    flyTo(nextBouncePoint(first.t - time), first.t);
+    // After a fixed launch (start, rail, ramp) the ball lands where physics puts it.
+    const landing = pos;
     settle([0, 0, 0]);
     // Rows wind around the shaft like a square spiral staircase, so seen from above
     // consecutive rows sit side by side instead of piling on top of each other.

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ballAt, buildCourse, cameraTarget, stepsToNotes, type MarbleNote, type Vec3 } from '../../src/marble/choreo';
-import { DEFAULT_MARBLE, midiToNotes, songNotes, courseOptions, sanitizeMarble } from '../../src/marble/config';
+import { applyTheme, DEFAULT_MARBLE, MARBLE_THEMES, midiToNotes, songNotes, courseOptions, sanitizeMarble } from '../../src/marble/config';
+import { randomMarble } from '../../src/marble/random';
+import { Rng } from '../../src/rng';
 
 const dist = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -76,5 +78,42 @@ describe('marble course', () => {
     ]);
     expect(sanitizeMarble({ bpm: 'x', seed: 3 }).bpm).toBe(DEFAULT_MARBLE.bpm);
     expect(sanitizeMarble({ seed: 3 }).seed).toBe(3);
+  });
+});
+
+describe('marble variety', () => {
+  it('every layout hits every note on time and stays continuous', () => {
+    for (const layout of ['zigzag', 'spiral', 'scatter', 'stairs'] as const) {
+      const c = buildCourse(mixed(), { seed: 11, layout });
+      expect(c.hits.length, layout).toBe(mixed().length);
+      for (let t = c.start; t < c.end; t += 0.01) expect(dist(ballAt(c, t), ballAt(c, t + 0.01)), layout).toBeLessThan(0.3);
+    }
+    const spiral = buildCourse(mixed(), { seed: 11, layout: 'spiral' });
+    // Spiral bars sit around the shaft, not just left/right.
+    expect(spiral.bars.some((b) => Math.abs(b.center[2]) > 0.3)).toBe(true);
+    expect(buildCourse(mixed(), { seed: 11, layout: 'stairs' }).rails.length).toBeGreaterThan(1);
+  });
+
+  it('themes only change the look', () => {
+    const c = { ...DEFAULT_MARBLE };
+    applyTheme(c, 'neon');
+    expect(c.barStyle).toBe('neon');
+    expect(c.theme).toBe('neon');
+    expect(c.song).toBe(DEFAULT_MARBLE.song);
+    expect(MARBLE_THEMES.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('random configs differ and respect locks', () => {
+    const rng = new Rng(5);
+    const free = Array.from({ length: 20 }, () => randomMarble(DEFAULT_MARBLE, rng, { music: false, look: false, text: false }));
+    expect(new Set(free.map((c) => c.theme)).size).toBeGreaterThan(3);
+    expect(new Set(free.map((c) => c.layout)).size).toBeGreaterThan(2);
+    expect(new Set(free.map((c) => c.song)).size).toBeGreaterThan(2);
+    for (const c of free) expect(c.resolution).toBe(DEFAULT_MARBLE.resolution);
+    const locked = randomMarble({ ...DEFAULT_MARBLE, title: 'X' }, rng, { music: true, look: true, text: true });
+    expect(locked.song).toBe(DEFAULT_MARBLE.song);
+    expect(locked.theme).toBe(DEFAULT_MARBLE.theme);
+    expect(locked.title).toBe('X');
+    expect(sanitizeMarble(JSON.parse(JSON.stringify(free[0])))).toEqual(free[0]);
   });
 });

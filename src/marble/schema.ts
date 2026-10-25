@@ -1,6 +1,6 @@
 import { MELODIES } from '../audio/melodies';
 import type { Group } from '../ui/schema';
-import type { MarbleConfig } from './config';
+import { MARBLE_THEMES, type MarbleConfig } from './config';
 
 const INSTRUMENTS: [string, string][] = [
   ['marimba', 'Marimba (gỗ)'], ['musicbox', 'Hộp nhạc'], ['bell', 'Chuông'], ['piano', 'Piano'], ['harp', 'Đàn hạc'],
@@ -28,6 +28,10 @@ export const MARBLE_GROUPS: Group<MarbleConfig>[] = [
     title: '🛤 Đường chạy',
     open: true,
     fields: [
+      {
+        key: 'layout', label: 'Kiểu đường chạy', type: 'select',
+        options: [['zigzag', '⚡ Zigzag 2 cột (như video gốc)'], ['spiral', '🌀 Xoắn ốc quanh trục'], ['scatter', '✨ Rải ngẫu nhiên'], ['stairs', '🎹 Cầu thang phím lăn']],
+      },
       { key: 'seed', label: 'Seed bố cục', type: 'number', min: 0, step: 1 },
       { key: 'width', label: 'Độ rộng giữa hai hàng phím', type: 'range', min: 0.3, max: 2.5, step: 0.05 },
       { key: 'descent', label: 'Tốc độ rơi xuống', type: 'range', min: 0.3, max: 8, step: 0.1 },
@@ -43,19 +47,42 @@ export const MARBLE_GROUPS: Group<MarbleConfig>[] = [
   {
     id: 'look',
     title: '🎨 Hình ảnh',
+    open: true,
     fields: [
+      {
+        key: 'theme', label: 'Chủ đề (đổi cả bộ màu, chất liệu, bi)', type: 'select', live: true,
+        options: MARBLE_THEMES.map((t) => [t.id, t.label] as [string, string]),
+      },
+      {
+        key: 'barStyle', label: 'Chất liệu phím', type: 'select', live: true,
+        options: [['wood', 'Gỗ vân'], ['plain', 'Trơn'], ['glass', 'Kính trong'], ['metal', 'Kim loại'], ['neon', 'Neon phát sáng']],
+      },
+      {
+        key: 'colorMode', label: 'Tô màu phím', type: 'select', live: true,
+        options: [['played', 'Một màu → đổi màu khi gõ'], ['pitch', 'Cầu vồng theo cao độ nốt'], ['random', 'Ngẫu nhiên mỗi phím']],
+      },
       { key: 'bgColor', label: 'Màu nền / sương', type: 'color', live: true },
       { key: 'fog', label: 'Độ dày sương', type: 'range', min: 0, max: 1, step: 0.05, live: true },
       { key: 'barColor', label: 'Phím chưa gõ', type: 'color', live: true },
       { key: 'playedColor', label: 'Phím đã gõ', type: 'color', live: true },
       { key: 'holderColor', label: 'Giá đỡ', type: 'color' },
+      {
+        key: 'ballStyle', label: 'Kiểu bi', type: 'select', live: true,
+        options: [['steel', 'Thép'], ['gold', 'Vàng'], ['glass', 'Thủy tinh'], ['glow', 'Phát sáng'], ['plastic', 'Nhựa màu']],
+      },
       { key: 'ballColor', label: 'Viên bi', type: 'color', live: true },
       { key: 'stripeColor', label: 'Vạch trên bi', type: 'color', live: true },
+      {
+        key: 'cameraMode', label: 'Kiểu camera', type: 'select', live: true,
+        options: [['side', 'Ngang chéo (như video gốc)'], ['top', 'Nhìn từ trên xuống'], ['orbit', 'Xoay vòng quanh bi'], ['close', 'Cận cảnh thấp']],
+      },
       { key: 'cameraDistance', label: 'Camera: khoảng cách', type: 'range', min: 1.5, max: 8, step: 0.1, live: true },
       { key: 'cameraAngle', label: 'Camera: góc xoay quanh (độ)', type: 'range', min: -90, max: 90, step: 1, live: true },
       { key: 'cameraElevation', label: 'Camera: góc nhìn từ trên (độ)', type: 'range', min: -30, max: 85, step: 1, live: true },
       { key: 'light', label: 'Độ sáng đèn', type: 'range', min: 0.2, max: 2.5, step: 0.05, live: true },
+      { key: 'backdrop', label: 'Phông nền', type: 'select', live: true, options: [['wall', 'Tường (có bóng đổ)'], ['void', 'Khoảng không']] },
       { key: 'shadows', label: 'Bóng đổ', type: 'checkbox', live: true },
+      { key: 'sparks', label: 'Tia lửa khi chạm phím', type: 'checkbox', live: true },
       { key: 'flash', label: 'Phím lóe sáng khi chạm', type: 'checkbox', live: true },
     ],
   },

@@ -50,6 +50,29 @@
         </div>
         <p id="audio-hint" class="hint">🔈 Bấm ▶ để phát kèm tiếng (trình duyệt chặn tự phát tiếng).</p>
         <div class="cards">
+          <div class="card random-card">
+            <h3>🎲 Tạo video 3D ngẫu nhiên</h3>
+            <p class="hint">Mỗi lần bấm ra một video khác hẳn: chủ đề (9 kiểu), đường chạy (zigzag, xoắn ốc, rải ngẫu nhiên, cầu thang), chất liệu phím, kiểu bi, camera, bài nhạc, nhịp, nhạc cụ và câu hook.</p>
+            <div class="lock-row">
+              <span class="hint">Giữ nguyên:</span>
+              <label class="inline"><input id="lock-music" type="checkbox" /> Bài nhạc</label>
+              <label class="inline"><input id="lock-look" type="checkbox" /> Hình ảnh &amp; camera</label>
+              <label class="inline"><input id="lock-text" type="checkbox" /> Chữ</label>
+            </div>
+            <div class="search-row">
+              <button id="btn-random" type="button" class="primary" title="Phím tắt: G">🎲 Tạo ngẫu nhiên</button>
+              <select id="rand-lang" aria-label="Ngôn ngữ câu hook">
+                <option value="en">English hooks</option>
+                <option value="vi">Hook tiếng Việt</option>
+              </select>
+              <span class="batch">
+                <button id="btn-random-batch" type="button" title="Mỗi video một cấu hình ngẫu nhiên, xuất lần lượt">🎬 Tạo &amp; xuất</button>
+                <input id="random-count" type="number" min="1" max="50" value="5" aria-label="Số video ngẫu nhiên" />
+                <span>video</span>
+              </span>
+            </div>
+            <div id="random-status" class="status"></div>
+          </div>
           <div class="card">
             <h3>⬇ Xuất video 3D</h3>
             <div class="export-row">

@@ -10,6 +10,14 @@ type Canvas2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 const RING_TIME = 0.9;
 const THICK = 0.07;
+const SPARK_MAX = 600;
+const SPARK_LIFE = 0.6;
+
+/** Deterministic pseudo-random number in [0, 1). */
+function hash(x: number): number {
+  const s = Math.sin(x * 127.1 + 311.7) * 43758.5453;
+  return s - Math.floor(s);
+}
 
 /**
  * The 3D marble machine in the look of the classic "marble music" videos: orange
@@ -25,7 +33,7 @@ export class MarbleScene {
   private camera: THREE.PerspectiveCamera;
   private lamp: THREE.SpotLight;
   private hemi: THREE.HemisphereLight;
-  private key = new THREE.DirectionalLight(0xfff4e6, 1.3);
+  private key = new THREE.DirectionalLight(0xffffff, 1.3);
   private wall: THREE.Mesh;
   private ball: THREE.Group;
   private course: Course | null = null;
@@ -37,6 +45,12 @@ export class MarbleScene {
   private cfg: MarbleConfig | null = null;
   private envTex: THREE.Texture;
   private woodTex: THREE.Texture;
+  private dotsTex: THREE.Texture;
+  private fresh: THREE.Color[] = [];
+  private played: THREE.Color[] = [];
+  private sparks: THREE.Points;
+  private sparkPos = new Float32Array(SPARK_MAX * 3);
+  private sparkCol = new Float32Array(SPARK_MAX * 3);
 
   constructor(readonly canvas: AnyCanvas, width: number, height: number) {
     this.renderer = new THREE.WebGLRenderer({ canvas: canvas as HTMLCanvasElement, antialias: true, preserveDrawingBuffer: true });
@@ -49,7 +63,8 @@ export class MarbleScene {
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
-    this.woodTex = woodTexture();
+    this.woodTex = woodTexture(true);
+    this.dotsTex = woodTexture(false);
 
     this.camera = new THREE.PerspectiveCamera(68, width / height, 0.1, 60);
     this.hemi = new THREE.HemisphereLight(0xc8d4ff, 0x1a1e28, 0.35);
@@ -66,6 +81,16 @@ export class MarbleScene {
     this.scene.add(this.hemi, this.key, this.key.target, this.lamp, this.lamp.target, this.wall, this.dynamic);
     this.ball = new THREE.Group();
     this.scene.add(this.ball);
+
+    // Sparks that burst from a bar when it is hit (positions are a pure function of time).
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(this.sparkPos, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(this.sparkCol, 3));
+    this.sparks = new THREE.Points(g, new THREE.PointsMaterial({
+      size: 0.035, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+    this.sparks.frustumCulled = false;
+    this.scene.add(this.sparks);
   }
 
   resize(width: number, height: number): void {
@@ -88,10 +113,7 @@ export class MarbleScene {
 
     const box = new THREE.BoxGeometry(1, 1, 1);
     if (course.bars.length > 0) {
-      // Plate faces (±Y of the box) show the wood grain and the two pin holes.
-      const face = new THREE.MeshStandardMaterial({ map: this.woodTex, roughness: 0.6, envMap: this.envTex, envMapIntensity: 0.35 });
-      const edge = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, envMap: this.envTex, envMapIntensity: 0.3 });
-      const mesh = new THREE.InstancedMesh(box, [edge, edge, face, face, edge, edge], course.bars.length);
+      const mesh = new THREE.InstancedMesh(box, new THREE.MeshBasicMaterial(), course.bars.length);
       mesh.castShadow = mesh.receiveShadow = true;
       course.bars.forEach((b, i) => {
         const m = barMatrix(b, 0);
@@ -151,7 +173,60 @@ export class MarbleScene {
         this.dynamic.add(tube);
       }
     }
+    this.wire = wire;
     this.applyLook(cfg);
+  }
+
+  private wire: THREE.MeshStandardMaterial | null = null;
+
+  /** Bar materials for a style. Plate faces (±Y of the box) carry the grain and two pin holes. */
+  private barMaterials(style: MarbleConfig['barStyle']): THREE.Material[] {
+    let face: THREE.Material, edge: THREE.Material;
+    switch (style) {
+      case 'neon':
+        // Unlit and not tone-mapped, so the colours stay fully saturated like neon tubes.
+        face = new THREE.MeshBasicMaterial({ map: this.dotsTex, toneMapped: false });
+        edge = new THREE.MeshBasicMaterial({ toneMapped: false });
+        break;
+      case 'glass':
+        face = new THREE.MeshStandardMaterial({ map: this.dotsTex, roughness: 0.08, metalness: 0, transparent: true, opacity: 0.78, envMap: this.envTex, envMapIntensity: 0.8 });
+        edge = new THREE.MeshStandardMaterial({ roughness: 0.08, transparent: true, opacity: 0.85, envMap: this.envTex, envMapIntensity: 0.8 });
+        break;
+      case 'metal':
+        face = new THREE.MeshStandardMaterial({ map: this.dotsTex, roughness: 0.25, metalness: 1, envMap: this.envTex, envMapIntensity: 1.3 });
+        edge = new THREE.MeshStandardMaterial({ roughness: 0.3, metalness: 1, envMap: this.envTex, envMapIntensity: 1.3 });
+        break;
+      case 'plain':
+        face = new THREE.MeshStandardMaterial({ map: this.dotsTex, roughness: 0.45, envMap: this.envTex, envMapIntensity: 0.4 });
+        edge = new THREE.MeshStandardMaterial({ roughness: 0.5, envMap: this.envTex, envMapIntensity: 0.4 });
+        break;
+      default:
+        face = new THREE.MeshStandardMaterial({ map: this.woodTex, roughness: 0.6, envMap: this.envTex, envMapIntensity: 0.35 });
+        edge = new THREE.MeshStandardMaterial({ roughness: 0.7, envMap: this.envTex, envMapIntensity: 0.3 });
+    }
+    return [edge, edge, face, face, edge, edge];
+  }
+
+  /** Per-bar colours before and after the hit, by colour mode. */
+  private barColors(cfg: MarbleConfig): void {
+    this.fresh = [];
+    this.played = [];
+    const white = new THREE.Color(0xffffff);
+    this.barList.forEach((b, i) => {
+      let f: THREE.Color, p: THREE.Color;
+      if (cfg.colorMode === 'played') {
+        f = new THREE.Color(cfg.barColor);
+        p = new THREE.Color(cfg.playedColor);
+      } else {
+        const hue = cfg.colorMode === 'pitch'
+          ? (((Math.min(...b.notes) % 12) + 12) % 12) / 12
+          : hash(i * 7.31 + cfg.seed * 0.137);
+        f = new THREE.Color().setHSL(hue, cfg.barStyle === 'neon' ? 1 : 0.85, cfg.barStyle === 'neon' ? 0.55 : 0.55);
+        p = f.clone().lerp(white, cfg.barStyle === 'neon' ? 0.35 : 0.65);
+      }
+      this.fresh.push(f);
+      this.played.push(p);
+    });
   }
 
   /** Colours, fog, lights and ball — no geometry rebuild needed. */
@@ -162,6 +237,15 @@ export class MarbleScene {
     (this.wall.material as THREE.MeshStandardMaterial).color.copy(bg);
     const near = cfg.cameraDistance + 0.5;
     this.scene.fog = new THREE.Fog(bg, near, near + 3 + (1 - cfg.fog) * 14);
+    this.wall.visible = cfg.backdrop === 'wall';
+    if (this.wire) this.wire.color.set(cfg.holderColor);
+    if (this.bars) {
+      const old = this.bars.material;
+      for (const m of Array.isArray(old) ? old : [old]) m.dispose();
+      this.bars.material = this.barMaterials(cfg.barStyle);
+      this.bars.castShadow = cfg.barStyle !== 'glass';
+    }
+    this.barColors(cfg);
     this.renderer.shadowMap.enabled = cfg.shadows;
     this.lamp.castShadow = cfg.shadows;
     this.lamp.intensity = 40 * cfg.light;
@@ -178,16 +262,42 @@ export class MarbleScene {
       disposeDeep(obj);
     }
     const R = this.course?.opts.ballRadius ?? 0.11;
-    const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(R, 48, 32),
-      new THREE.MeshStandardMaterial({ color: cfg.ballColor, metalness: 1, roughness: 0.32, envMap: this.envTex, envMapIntensity: 1 }),
-    );
+    const sphere = new THREE.Mesh(new THREE.SphereGeometry(R, 48, 32), this.ballMaterial(cfg));
     const band = new THREE.Mesh(
       new THREE.TorusGeometry(R * 1.002, R * 0.1, 10, 48),
       new THREE.MeshStandardMaterial({ color: cfg.stripeColor, roughness: 0.4, metalness: 0.2, emissive: cfg.stripeColor, emissiveIntensity: 0.25 }),
     );
     this.ball.add(sphere, band);
     this.active.clear();
+  }
+
+  private ballMaterial(cfg: MarbleConfig): THREE.Material {
+    switch (cfg.ballStyle) {
+      case 'gold':
+        return new THREE.MeshStandardMaterial({ color: cfg.ballColor, metalness: 1, roughness: 0.2, envMap: this.envTex, envMapIntensity: 1.4 });
+      case 'glass':
+        return new THREE.MeshStandardMaterial({ color: cfg.ballColor, metalness: 0, roughness: 0.02, transparent: true, opacity: 0.45, envMap: this.envTex, envMapIntensity: 2 });
+      case 'glow':
+        return new THREE.MeshBasicMaterial({ color: cfg.ballColor, toneMapped: false });
+      case 'plastic':
+        return new THREE.MeshStandardMaterial({ color: cfg.ballColor, metalness: 0, roughness: 0.35, envMap: this.envTex, envMapIntensity: 0.6 });
+      default:
+        return new THREE.MeshStandardMaterial({ color: cfg.ballColor, metalness: 1, roughness: 0.32, envMap: this.envTex, envMapIntensity: 1 });
+    }
+  }
+
+  /** Camera direction (unit vector from the ball towards the camera) and distance. */
+  private view(cfg: MarbleConfig, t: number): { dir: THREE.Vector3; dist: number } {
+    let az = cfg.cameraAngle, el = cfg.cameraElevation, dist = cfg.cameraDistance;
+    if (cfg.cameraMode === 'top') el = Math.max(el, 62);
+    else if (cfg.cameraMode === 'orbit') az += t * 14;
+    else if (cfg.cameraMode === 'close') {
+      dist *= 0.62;
+      el = Math.min(el, 6);
+    }
+    az = (az * Math.PI) / 180;
+    el = (el * Math.PI) / 180;
+    return { dir: new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)), dist };
   }
 
   /** Renders the frame at course time `t`. */
@@ -206,10 +316,8 @@ export class MarbleScene {
 
     // Camera: a little above and to the side, always looking at the ball.
     const target = v3(cameraTarget(course, t));
-    const az = (cfg.cameraAngle * Math.PI) / 180;
-    const el = (cfg.cameraElevation * Math.PI) / 180;
-    const dir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
-    this.camera.position.copy(target).addScaledVector(dir, cfg.cameraDistance);
+    const { dir, dist } = this.view(cfg, t - course.start);
+    this.camera.position.copy(target).addScaledVector(dir, dist);
     this.camera.lookAt(target);
 
     // Lamp just in front of the ball, shining at the wall: nearby bars throw long shadow streaks.
@@ -222,6 +330,7 @@ export class MarbleScene {
     this.wall.lookAt(this.camera.position);
 
     this.paintBars(t, cfg);
+    this.paintSparks(t, cfg);
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -229,8 +338,6 @@ export class MarbleScene {
   private paintBars(t: number, cfg: MarbleConfig): void {
     const mesh = this.bars;
     if (!mesh) return;
-    const fresh = new THREE.Color(cfg.barColor);
-    const played = new THREE.Color(cfg.playedColor);
     const flash = new THREE.Color(0xffffff);
     const tmp = new THREE.Color();
     const now = new Set<number>();
@@ -238,13 +345,13 @@ export class MarbleScene {
     for (let i = 0; i < bars.length; i++) {
       const dt = t - bars[i].hitTime;
       if (dt < 0) {
-        mesh.setColorAt(i, fresh);
+        mesh.setColorAt(i, this.fresh[i]);
       } else if (dt < RING_TIME) {
-        tmp.copy(fresh).lerp(played, Math.min(1, dt / 0.12));
+        tmp.copy(this.fresh[i]).lerp(this.played[i], Math.min(1, dt / 0.12));
         if (cfg.flash) tmp.lerp(flash, 0.6 * Math.exp(-dt * 14));
         mesh.setColorAt(i, tmp);
       } else {
-        mesh.setColorAt(i, played);
+        mesh.setColorAt(i, this.played[i]);
       }
       if (dt >= 0 && dt < RING_TIME) {
         now.add(i);
@@ -258,16 +365,55 @@ export class MarbleScene {
     this.active = now;
   }
 
+  /** Up to 14 sparks per hit, flying out from the contact point for SPARK_LIFE seconds. */
+  private paintSparks(t: number, cfg: MarbleConfig): void {
+    let n = 0;
+    const course = this.course!;
+    if (cfg.sparks) {
+      const bars = this.barList;
+      // Bars are in hit order, so binary-search the first one hit in the last SPARK_LIFE seconds.
+      let lo = 0, hi = bars.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (bars[mid].hitTime < t - SPARK_LIFE) lo = mid + 1;
+        else hi = mid;
+      }
+      for (let i = lo; i < bars.length && bars[i].hitTime <= t && n < SPARK_MAX; i++) {
+        const dt = t - bars[i].hitTime;
+        const p = ballAt(course, bars[i].hitTime);
+        const nrm = bars[i].normal;
+        const fade = 1 - dt / SPARK_LIFE;
+        const c = this.fresh[i];
+        for (let k = 0; k < 14 && n < SPARK_MAX; k++, n++) {
+          const h1 = hash(i * 13.7 + k * 1.91), h2 = hash(i * 3.3 + k * 7.7), h3 = hash(i * 5.1 + k * 2.3);
+          const sp = 0.8 + h3 * 1.6;
+          const v = [nrm[0] * sp + (h1 - 0.5) * 1.8, nrm[1] * sp + (h2 - 0.5) * 1.8 + 0.6, nrm[2] * sp + (h3 - 0.5) * 1.8];
+          this.sparkPos[n * 3] = p[0] + v[0] * dt;
+          this.sparkPos[n * 3 + 1] = p[1] + v[1] * dt - 2.5 * dt * dt;
+          this.sparkPos[n * 3 + 2] = p[2] + v[2] * dt;
+          this.sparkCol[n * 3] = (0.5 + c.r * 0.5) * fade;
+          this.sparkCol[n * 3 + 1] = (0.5 + c.g * 0.5) * fade;
+          this.sparkCol[n * 3 + 2] = (0.5 + c.b * 0.5) * fade;
+        }
+      }
+    }
+    const g = this.sparks.geometry;
+    g.setDrawRange(0, n);
+    (g.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    (g.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+  }
+
   dispose(): void {
     disposeDeep(this.scene);
     this.envTex.dispose();
     this.woodTex.dispose();
+    this.dotsTex.dispose();
     this.renderer.dispose();
   }
 }
 
-/** Light wood grain with two dark pin holes; tinted per bar by the instance colour. */
-function woodTexture(): THREE.Texture {
+/** Light wood grain (optional) with two dark pin holes; tinted per bar by the instance colour. */
+function woodTexture(grain: boolean): THREE.Texture {
   const W = 192, H = 96;
   const c = new OffscreenCanvas(W, H);
   const ctx = c.getContext('2d')!;
@@ -276,7 +422,7 @@ function woodTexture(): THREE.Texture {
   // Soft mottling along the bar, like the grain in the original videos.
   let s = 12345;
   const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
-  for (let i = 0; i < 70; i++) {
+  for (let i = 0; i < (grain ? 70 : 0); i++) {
     const g = 205 + Math.floor(rnd() * 45);
     ctx.fillStyle = `rgba(${g},${g},${g},0.55)`;
     ctx.beginPath();

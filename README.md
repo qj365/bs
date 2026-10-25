@@ -84,6 +84,15 @@ Trang riêng `marble.html`, chuyển qua lại với Ball Studio 2D bằng tab t
 - Giống kiểu video gốc: phím gỗ **màu cam khi chưa gõ, chuyển trắng sau khi gõ**. Mỗi phím có 2 chấm đen và giá đỡ là khung dây đen hình chữ ㄷ. Phím rung và lóe sáng khi bị gõ.
 - Camera nhìn ngang chéo, bi luôn ở giữa khung hình. Đèn đi theo bi chiếu lên tường phía sau, tạo các vệt bóng tỏa ra quanh bi; xa hơn thì chìm vào sương mờ xanh xám. Góc camera, khoảng cách, màu phím, màu bi đều chỉnh được.
 - Âm thanh: nốt trầm và nốt cao dùng 2 nhạc cụ riêng (mặc định marimba và hộp nhạc), âm stereo theo vị trí phím, có tiếng bi lăn trên ray/máng.
+- **Mỗi video một kiểu khác nhau:**
+  - **Đường chạy:** zigzag 2 cột (như video gốc), xoắn ốc quanh trục, rải ngẫu nhiên, cầu thang phím lăn.
+  - **9 chủ đề:** Cổ điển, Neon đêm, Pha lê, Kẹo ngọt, Vàng kim, Đại dương, Rừng gỗ, Cầu vồng, Hoàng hôn.
+  - **Chất liệu phím:** gỗ vân, trơn, kính, kim loại, neon phát sáng.
+  - **Tô màu phím:** đổi màu khi gõ, cầu vồng theo cao độ, ngẫu nhiên.
+  - **Kiểu bi:** thép, vàng, thủy tinh, phát sáng, nhựa màu.
+  - **Camera:** ngang chéo, từ trên xuống, xoay vòng quanh bi, cận cảnh.
+  - **Phông nền:** tường hoặc khoảng không; có tia lửa khi chạm phím.
+- **🎲 Tạo video 3D ngẫu nhiên** (phím G): tự chọn chủ đề, đường chạy, camera, bài nhạc, nhịp, cặp nhạc cụ và câu hook. Có thể giữ nguyên bài nhạc, hình ảnh hoặc chữ. Nút **Tạo & xuất** xuất liền N video, mỗi video một cấu hình; tên file ghi rõ chủ đề, đường chạy, bài và seed.
 - Nguồn nhạc: 6 bài có sẵn (chỉnh BPM, số lần lặp, dịch giọng) hoặc **file MIDI** (giữ nguyên nhịp gốc, hợp âm gõ cùng lúc).
 - Chữ: tiêu đề ở trên, chữ phụ ở dưới.
 - Tua tức thì đến bất kỳ thời điểm nào, vì vị trí bi tính trực tiếp từ thời gian.
@@ -130,8 +139,8 @@ npm run test:e2e    # E2E test bằng Playwright (tự build và chạy server)
   - Trình soạn giai điệu, nạp MIDI, nạp âm thanh riêng.
   - Xuất MP4 (kiểm tra cấu trúc file, track hình và track tiếng); xuất bằng CPU; xuất 2 bản; hủy khi đang xuất.
   - Tìm seed; renderer CPU.
-  - Bi rơi 3D: chuyển tab, vẽ cảnh 3D, tua, phát, đổi bài/BPM/seed, nạp MIDI (sinh dãy phím lăn và máng cong), xuất MP4 có tiếng.
-- **Unit test bi rơi 3D:** mỗi nốt có đúng một phím, bi chạm phím đúng thời điểm, quỹ đạo liền mạch, bi bật ra đúng phía mặt phím, cùng seed thì cùng đường chạy.
+  - Bi rơi 3D: chuyển tab, vẽ cảnh 3D, tua, phát, đổi bài/BPM/seed, nạp MIDI (sinh dãy phím lăn và máng cong), chủ đề và tùy chọn hình ảnh, tạo ngẫu nhiên kèm khóa, xuất MP4 có tiếng.
+- **Unit test bi rơi 3D:** mỗi nốt có đúng một phím, bi chạm phím đúng thời điểm, quỹ đạo liền mạch, bi bật ra đúng phía mặt phím, cùng seed thì cùng đường chạy; cả 4 kiểu đường chạy đều khớp nốt; cấu hình ngẫu nhiên đa dạng và tôn trọng khóa.
 
 CI (`.github/workflows/ci.yml`) hiện chỉ chạy khi bấm tay ở tab Actions ("Run workflow"). Muốn chạy ở mỗi lần push, thêm lại `push:` và `pull_request:` vào mục `on:`.
 

@@ -120,9 +120,56 @@ test('exports a 3D clip as MP4 with sound', async ({ page }, info) => {
   const dl = page.waitForEvent('download', { timeout: wait });
   await page.click('#btn-export');
   const path = await saveDownload(await dl, info.outputDir);
-  expect(path).toMatch(/marble-canon-7\.mp4$/);
+  expect(path).toMatch(/marble-classic-zigzag-canon-7\.mp4$/);
   expect(statSync(path).size).toBeGreaterThan(10_000);
   expect(mp4Boxes(path)).toContain('moov');
   expect(mp4Tracks(path).sort()).toEqual(['soun', 'vide']);
   await expect(page.locator('#export-status')).toContainText('1.5 giây');
+});
+
+test('random 3D videos change theme, layout and song; locks keep parts', async ({ page, errors }) => {
+  void errors;
+  await openMarble(page);
+  const seen = { theme: new Set<unknown>(), layout: new Set<unknown>(), song: new Set<unknown>() };
+  for (let i = 0; i < 8; i++) {
+    await page.click('#btn-random');
+    const c = await marble(page, 'config');
+    seen.theme.add(c.theme);
+    seen.layout.add(c.layout);
+    seen.song.add(c.song);
+  }
+  expect(seen.theme.size).toBeGreaterThan(2);
+  expect(seen.layout.size).toBeGreaterThan(1);
+  expect(seen.song.size).toBeGreaterThan(1);
+  await expect(page.locator('#random-status')).toContainText('seed');
+  await expect.poll(() => canvasColours(page)).toBeGreaterThan(10);
+
+  const before = await marble(page, 'config');
+  await page.check('#lock-music');
+  await page.check('#lock-look');
+  await page.keyboard.press('g');
+  const after = await marble(page, 'config');
+  expect(after.song).toBe(before.song);
+  expect(after.bpm).toBe(before.bpm);
+  expect(after.theme).toBe(before.theme);
+});
+
+test('theme and look options apply', async ({ page, errors }) => {
+  void errors;
+  await openMarble(page);
+  await page.selectOption('.row[data-key="theme"] select', 'neon');
+  let c = await marble(page, 'config');
+  expect(c.barStyle).toBe('neon');
+  expect(c.sparks).toBe(true);
+  await expect(page.locator('.row[data-key="barStyle"] select')).toHaveValue('neon');
+  for (const [key, value] of [['layout', 'spiral'], ['cameraMode', 'orbit'], ['ballStyle', 'glass'], ['backdrop', 'wall'], ['colorMode', 'random']]) {
+    await page.selectOption(`.row[data-key="${key}"] select`, value);
+  }
+  c = await marble(page, 'config');
+  expect([c.layout, c.cameraMode, c.ballStyle, c.colorMode]).toEqual(['spiral', 'orbit', 'glass', 'random']);
+  await page.locator('#scrub').evaluate((el: HTMLInputElement) => {
+    el.value = '5';
+    el.dispatchEvent(new Event('input'));
+  });
+  await expect.poll(() => canvasColours(page)).toBeGreaterThan(20);
 });
