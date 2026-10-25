@@ -121,6 +121,65 @@ describe('extras', () => {
   });
 });
 
+describe('timeline events, portals, forces', () => {
+  it('chaos events fire at their time, in order', async () => {
+    const cfg = modeConfig('escape', {
+      spawnOnEscape: 0, gapAngle: 0,
+      chaos: [{ t: 6, kind: 'blackHole', value: 2 }, { t: 3, kind: 'gravityFlip', value: 0 }, { t: 9, kind: 'spawn', value: 5 }],
+    });
+    const { events, stats } = await run(cfg, 12);
+    const chaos = events.filter((e) => e.kind === 'chaos');
+    expect(chaos.map((e) => e.level)).toEqual([0, 2, 5]); // flip, black hole, spawn
+    expect(chaos[0].t).toBeCloseTo(3, 1);
+    expect(chaos[1].t).toBeCloseTo(6, 1);
+    expect(stats.alive).toBe(6);
+    expect(stats.lastChaosKind).toBe(5);
+  });
+
+  it('gravity flip sends the ball to the top half', async () => {
+    const cfg = modeConfig('grow', { growAmount: 0, chaos: [{ t: 1, kind: 'gravityFlip', value: 0 }] });
+    const { sim } = await run(cfg, 8);
+    const d = sim.renderData(0);
+    // Over the last frames the ball spends its time above the centre.
+    expect(d.balls[1]).toBeLessThan(sim.layout.cy + 50);
+  });
+
+  it('black hole pulls balls to the centre', async () => {
+    const cfg = modeConfig('symmetric', { initialBalls: 10, chaos: [{ t: 0.5, kind: 'blackHole', value: 20 }] });
+    const { sim, stats } = await run(cfg, 6);
+    expect(stats.blackHole).toBe(true);
+    const d = sim.renderData(0);
+    let mean = 0;
+    for (let i = 0; i < d.ballCount; i++) mean += Math.hypot(d.balls[i * 8] - sim.layout.cx, d.balls[i * 8 + 1] - sim.layout.cy);
+    expect(mean / d.ballCount).toBeLessThan(260);
+  });
+
+  it('portals teleport balls', async () => {
+    const { events, sim } = await run(variantConfig('escape-portals', { portalSize: 80 }), 30);
+    expect(events.some((e) => e.kind === 'portal')).toBe(true);
+    expect(sim.renderData(0).powerupCount).toBeGreaterThanOrEqual(2); // both portals drawn
+  });
+
+  it('near misses are reported when a ball bounces off the gap edge', async () => {
+    const { events, stats } = await run(modeConfig('escape', { spawnOnEscape: 0, gapAngle: 12, seed: 4 }), 60);
+    expect(stats.nearMisses).toBeGreaterThan(0);
+    expect(events.filter((e) => e.kind === 'nearmiss')).toHaveLength(stats.nearMisses);
+  });
+
+  it('events carry a finite x position', async () => {
+    const { events } = await run(modeConfig('koth'), 10);
+    expect(events.length).toBeGreaterThan(0);
+    for (const e of events) expect(Number.isFinite(e.x)).toBe(true);
+  });
+
+  it('wind and magnet run cleanly', async () => {
+    await run(modeConfig('escape', { wind: 800 }), 10);
+    await run(variantConfig('grow-magnet'), 10);
+    await run(variantConfig('escape-chaos'), 30);
+    await run(variantConfig('koth-wind'), 30);
+  });
+});
+
 describe('determinism', () => {
   const signature = (events: { t: number; kind: string; strength: number }[]) =>
     events.map((e) => `${e.t.toFixed(5)}:${e.kind}:${e.strength.toFixed(3)}`).join('|');

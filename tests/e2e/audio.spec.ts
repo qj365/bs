@@ -88,7 +88,7 @@ test('a user sound file becomes the instrument', async ({ page }) => {
   await expect.poll(async () => (await config(page)).instrument).toBe('sample');
   await expect(page.locator('.row[data-key="action:sample"] .hint')).toContainText('ding.wav');
   // Every built-in instrument can be selected.
-  for (const inst of ['piano', 'bell', 'musicbox', 'harp', 'guitar', 'pluck', 'organ', 'synth', 'pop', 'chip', 'marimba']) {
+  for (const inst of ['piano', 'bell', 'musicbox', 'harp', 'guitar', 'pluck', 'organ', 'synth', 'pop', 'chip', 'glass', 'marble', 'wood', 'drop', 'marimba']) {
     await setSelect(page, 'instrument', inst);
   }
   await page.click('#btn-restart');

@@ -1,10 +1,10 @@
 import { ArrayBufferTarget, Muxer } from 'mp4-muxer';
-import type { Config } from '../config';
-import { createRenderer, type FrameRenderer } from '../render';
-import { GpuRenderer } from '../render/renderer';
-import { Simulation, counterValue, endMessage, type SimEvent } from '../sim';
+import { parseResolution, type Config } from '../config';
+import { Scene } from '../scene';
+import type { SimEvent } from '../sim';
+import { unwarpTime, warpTime } from '../sync';
 import { pickAudioCodec, pickVideoCodec } from './codecs';
-import type { WorkerIn, WorkerOut } from './protocol';
+import type { ExportPlan, WorkerIn, WorkerOut } from './protocol';
 
 const SAMPLE_RATE = 48000;
 interface WorkerScope {
@@ -22,16 +22,15 @@ let audioResolve: ((m: WorkerIn) => void) | null = null;
 ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
   const msg = ev.data;
   if (msg.type === 'start') {
-    run(msg.cfg).catch((err) => post({ type: 'error', message: err instanceof Error ? err.message : String(err) }));
+    run(msg.cfg, msg.plan ?? {}).catch((err) => post({ type: 'error', message: err instanceof Error ? err.message : String(err) }));
   } else if (audioResolve) {
     audioResolve(msg);
     audioResolve = null;
   }
 };
 
-async function run(cfg: Config): Promise<void> {
-  const sim = await Simulation.create(cfg);
-  const { width, height } = sim.layout;
+async function run(cfg: Config, plan: ExportPlan): Promise<void> {
+  const { width, height } = parseResolution(cfg.resolution);
   const fps = cfg.fps;
   const video = await pickVideoCodec(width, height, fps, Math.round(cfg.bitrate * 1_000_000), cfg.encoder);
   if (!video) {
@@ -39,9 +38,10 @@ async function run(cfg: Config): Promise<void> {
       ? 'Trình duyệt không có bộ mã hóa video phù hợp (cần Chrome/Edge bản mới).'
       : `Không có bộ mã hóa ${cfg.encoder.toUpperCase()} cho cấu hình này — thử chọn "Tự động".`);
   }
-  const audio = cfg.sound ? await pickAudioCodec(SAMPLE_RATE) : null;
-  const renderer = createRenderer(cfg.renderer, () => new OffscreenCanvas(width, height), sim.layout);
-  post({ type: 'codecs', video: video.label, audio: audio?.label ?? 'không', renderer: renderer.kind });
+  const audio = cfg.sound || (plan.music && cfg.musicVolume > 0) ? await pickAudioCodec(SAMPLE_RATE) : null;
+  const crossfade = Math.max(0, plan.crossfade ?? 0);
+  const scene = await Scene.create(cfg, cfg.renderer, (w, h) => new OffscreenCanvas(w, h), { composite: crossfade > 0 });
+  post({ type: 'codecs', video: video.label, audio: audio?.label ?? 'không', renderer: scene.kind });
 
   const target = new ArrayBufferTarget();
   const muxer = new Muxer({
@@ -59,29 +59,51 @@ async function run(cfg: Config): Promise<void> {
   });
   encoder.configure(video.config);
 
-
   captureMode = null;
+  const warp = plan.warp && plan.warp.length >= 4 ? plan.warp : null;
+  const start = Math.max(0, plan.start ?? 0);
+  const videoEnd = plan.end ?? cfg.duration;
+  const maxFrames = Math.max(1, Math.round((videoEnd - start) * fps));
+  const outDuration = maxFrames / fps;
+
+  // Fast-forward to the clip start, still feeding the paint layer frame by frame.
+  for (let v = 1 / 60; v <= start + 1e-9; v += 1 / 60) {
+    scene.advanceTo(warpTime(warp, v));
+    scene.drainEvents();
+    scene.paintOnly(cfg);
+  }
+
   const events: SimEvent[] = [];
-  const maxFrames = Math.max(1, Math.round(cfg.duration * fps));
   const frameUs = 1_000_000 / fps;
   const keyEvery = fps * 2;
   const t0 = performance.now();
   let frames = 0;
+  let first: ImageBitmap | null = null;
+  let cover: ArrayBuffer | undefined;
+  const coverFrame = plan.coverAt === undefined ? -1 : Math.max(0, Math.min(maxFrames - 1, Math.round(plan.coverAt * fps)));
 
   for (let i = 0; i < maxFrames; i++) {
     if (encodeError) throw encodeError;
-    const t = i / fps;
-    sim.advanceTo(t);
-    for (const e of sim.drainEvents()) events.push(e);
-    const st = sim.stats();
-    if (cfg.stopOnFinish && st.finished && t > st.finishTime + cfg.endHold) break;
+    const outT = i / fps;
+    const vt = start + outT;
+    scene.advanceTo(warpTime(warp, vt));
+    for (const e of scene.drainEvents()) {
+      e.t = unwarpTime(warp, e.t) - start;
+      events.push(e);
+    }
+    const st = scene.stats();
+    if (plan.end === undefined && cfg.stopOnFinish && st.finished && vt > unwarpTime(warp, st.finishTime) + cfg.endHold) break;
 
-    const data = sim.renderData(cfg.trailLength);
-    renderer.render(cfg, data, {
-      counter: counterValue(cfg, st), time: t, end: endMessage(cfg, st), powerups: data.powerups, powerupCount: data.powerupCount,
+    const showOverlay = plan.overlay && outT >= plan.overlay.from && (plan.overlay.to === undefined || outT < plan.overlay.to);
+    const fadeStart = outDuration - crossfade;
+    scene.render(cfg, vt, {
+      overlay: showOverlay ? plan.overlay!.text : undefined,
+      fade: first && crossfade > 0 && outT > fadeStart ? { image: first, alpha: (outT - fadeStart) / crossfade } : undefined,
     });
 
-    const frame = capture(renderer, Math.round(i * frameUs), Math.round(frameUs));
+    const frame = capture(scene, Math.round(i * frameUs), Math.round(frameUs));
+    if (i === 0 && crossfade > 0) first = await createImageBitmap(frame);
+    if (i === coverFrame) cover = await toPng(frame);
     encoder.encode(frame, { keyFrame: i % keyEvery === 0 });
     frame.close();
     frames = i + 1;
@@ -98,11 +120,14 @@ async function run(cfg: Config): Promise<void> {
   await encoder.flush();
   encoder.close();
   if (encodeError) throw encodeError;
-  renderer.dispose();
+  first?.close();
+  const st = scene.stats();
+  const finishTime = st.finished ? unwarpTime(warp, st.finishTime) : -1;
+  scene.dispose();
 
   const duration = frames / fps;
   if (audio) {
-    post({ type: 'need-audio', events, duration });
+    post({ type: 'need-audio', events, duration, musicOffset: start });
     const reply = await new Promise<WorkerIn>((r) => (audioResolve = r));
     if (reply.type === 'audio') {
       post({ type: 'status', text: 'Đang mã hóa âm thanh…' });
@@ -113,7 +138,18 @@ async function run(cfg: Config): Promise<void> {
   muxer.finalize();
   const buffer = target.buffer;
   const elapsed = (performance.now() - t0) / 1000;
-  post({ type: 'done', buffer, frames, seconds: elapsed, duration, video: `${video.label} · vẽ ${renderer.kind.toUpperCase()}`, audio: audio?.label ?? '' }, [buffer]);
+  const transfer: Transferable[] = [buffer];
+  if (cover) transfer.push(cover);
+  post({
+    type: 'done', buffer, frames, seconds: elapsed, duration, cover, finishTime,
+    video: `${video.label} · vẽ ${scene.kind.toUpperCase()}`, audio: audio?.label ?? '',
+  }, transfer);
+}
+
+async function toPng(frame: VideoFrame): Promise<ArrayBuffer> {
+  const c = new OffscreenCanvas(frame.displayWidth, frame.displayHeight);
+  c.getContext('2d')!.drawImage(frame, 0, 0);
+  return (await c.convertToBlob({ type: 'image/png' })).arrayBuffer();
 }
 
 type CaptureMode = 'canvas' | 'bitmap' | 'pixels';
@@ -125,12 +161,12 @@ let pixels: Uint8Array | null = null;
  * when the GPU driver allows it; readPixels is the slower universal fallback.
  * The first method that works is remembered for the rest of the export.
  */
-function capture(renderer: FrameRenderer, timestamp: number, duration: number): VideoFrame {
+function capture(scene: Scene, timestamp: number, duration: number): VideoFrame {
   const order: CaptureMode[] = captureMode ? [captureMode] : ['canvas', 'bitmap', 'pixels'];
   let lastErr: unknown = null;
   for (const mode of order) {
     try {
-      const frame = captureWith(mode, renderer, timestamp, duration);
+      const frame = captureWith(mode, scene, timestamp, duration);
       captureMode = mode;
       return frame;
     } catch (err) {
@@ -140,8 +176,8 @@ function capture(renderer: FrameRenderer, timestamp: number, duration: number): 
   throw lastErr;
 }
 
-function captureWith(mode: CaptureMode, renderer: FrameRenderer, timestamp: number, duration: number): VideoFrame {
-  const canvas = renderer.canvas as OffscreenCanvas;
+function captureWith(mode: CaptureMode, scene: Scene, timestamp: number, duration: number): VideoFrame {
+  const canvas = scene.output as OffscreenCanvas;
   if (mode === 'canvas') return new VideoFrame(canvas, { timestamp, duration });
   if (mode === 'bitmap') {
     const bitmap = canvas.transferToImageBitmap();
@@ -152,8 +188,8 @@ function captureWith(mode: CaptureMode, renderer: FrameRenderer, timestamp: numb
     }
   }
   const { width, height } = canvas;
-  if (renderer instanceof GpuRenderer) {
-    const gl = renderer.gl;
+  const gl = scene.outputGl;
+  if (gl) {
     const rowBytes = width * 4;
     pixels ??= new Uint8Array(rowBytes * height);
     gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);

@@ -2,7 +2,8 @@ export type Mode =
   | 'escape' | 'infinite' | 'grow' | 'destruction' | 'accumulation' | 'collision'
   | 'spiral' | 'trail' | 'merge' | 'koth' | 'symmetric';
 export type Instrument =
-  | 'marimba' | 'piano' | 'bell' | 'pluck' | 'guitar' | 'harp' | 'musicbox' | 'organ' | 'synth' | 'pop' | 'chip' | 'sample';
+  | 'marimba' | 'piano' | 'bell' | 'pluck' | 'guitar' | 'harp' | 'musicbox' | 'organ' | 'synth' | 'pop' | 'chip'
+  | 'glass' | 'marble' | 'wood' | 'drop' | 'sample';
 export type NoteMode = 'melody' | 'scale' | 'random' | 'size';
 export type ColorMode = 'rainbow' | 'solid' | 'cycle';
 export type ScaleName = 'major' | 'minor' | 'pentatonic' | 'blues' | 'japanese' | 'chromatic';
@@ -11,6 +12,25 @@ export type ImpactMode = 'strings' | 'chain';
 export type Backend = 'auto' | 'gpu' | 'cpu';
 export type SafeZone = 'none' | 'tiktok' | 'shorts';
 export type Corner = 'tl' | 'tr' | 'bl' | 'br' | 'center';
+export type ChaosKind = 'gravityFlip' | 'gravityScale' | 'blackHole' | 'wind' | 'speedBurst' | 'spawn' | 'reverse' | 'widenGap';
+
+/** A twist that happens at a given second of the video. */
+export interface ChaosEvent {
+  t: number;
+  kind: ChaosKind;
+  value: number;
+}
+
+export const CHAOS_KINDS: Record<ChaosKind, { label: string; banner: string; value: string; def: number }> = {
+  gravityFlip: { label: 'Đảo ngược trọng lực', banner: '⚠️ TRỌNG LỰC ĐẢO NGƯỢC!', value: '—', def: 0 },
+  gravityScale: { label: 'Nhân trọng lực', banner: '⚠️ TRỌNG LỰC ×{v}!', value: 'hệ số', def: 2 },
+  blackHole: { label: 'Lỗ đen', banner: '🕳️ LỖ ĐEN!', value: 'giây', def: 3 },
+  wind: { label: 'Gió (3 giây)', banner: '💨 GIÓ MẠNH!', value: 'lực (âm = sang trái)', def: 1500 },
+  speedBurst: { label: 'Tăng tốc tất cả', banner: '⚡ TĂNG TỐC ×{v}!', value: 'hệ số', def: 1.6 },
+  spawn: { label: 'Thêm bóng', banner: '➕ THÊM {v} BÓNG!', value: 'số bóng', def: 10 },
+  reverse: { label: 'Đảo chiều xoay', banner: '🔄 ĐẢO CHIỀU!', value: '—', def: 0 },
+  widenGap: { label: 'Mở rộng khe', banner: '🚪 KHE MỞ RỘNG!', value: 'độ', def: 20 },
+};
 
 export interface Config {
   mode: Mode;
@@ -38,6 +58,11 @@ export interface Config {
   spiralTurns: number;
   spiralSpeed: number; // degrees / second
   gemCount: number;
+  portals: boolean;
+  portalSize: number;
+  magnet: number;
+  wind: number;
+  chaos: ChaosEvent[];
 
   // Balls
   initialBalls: number;
@@ -96,6 +121,13 @@ export interface Config {
   minNoteGap: number;
   ballHitSound: boolean;
   sfx: boolean;
+  stereo: boolean;
+  musicVolume: number;
+  beatSync: boolean;
+  beatStride: number; // 0 = auto, else use every Nth beat
+
+  // Battle (split screen)
+  battle: number; // 1 = single arena, 2 or 4 = side-by-side race
 
   // Output
   resolution: string; // "WxH"
@@ -109,6 +141,8 @@ export interface Config {
   previewScale: number;
   renderer: Backend;
   encoder: Backend;
+  exportCaption: boolean;
+  exportCover: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -135,6 +169,11 @@ export const DEFAULT_CONFIG: Config = {
   spiralTurns: 5,
   spiralSpeed: 90,
   gemCount: 12,
+  portals: false,
+  portalSize: 34,
+  magnet: 0,
+  wind: 0,
+  chaos: [],
 
   initialBalls: 1,
   ballRadius: 16,
@@ -188,6 +227,12 @@ export const DEFAULT_CONFIG: Config = {
   minNoteGap: 0.04,
   ballHitSound: false,
   sfx: true,
+  stereo: true,
+  musicVolume: 0.8,
+  beatSync: true,
+  beatStride: 0,
+
+  battle: 1,
 
   resolution: '1080x1920',
   fps: 60,
@@ -200,11 +245,14 @@ export const DEFAULT_CONFIG: Config = {
   previewScale: 0.5,
   renderer: 'auto',
   encoder: 'auto',
+  exportCaption: true,
+  exportCover: true,
 };
 
 /** Extras that each mode starts without unless its own defaults turn them on. */
 const FEATURE_RESET: Partial<Config> = {
   spikeArc: 0, spikeEffect: 'destroy', ringHp: 0, powerups: false, impactLines: 0,
+  portals: false, magnet: 0, wind: 0, chaos: [],
   paintTrail: false, ballCollisions: false, speedBoost: 1, restitution: 1,
 };
 
@@ -331,8 +379,11 @@ export const VARIANTS: Variant[] = [
   { id: 'will-escape', mode: 'escape', label: 'Bóng có thoát được không?', overrides: { spawnOnEscape: 0, gapAngle: 14, title: 'Quả bóng có thoát ra được không?', counterLabel: '', endText: 'THOÁT RỒI!' } },
   { id: 'escape-glass', mode: 'escape', label: 'Vòng kính', overrides: { gapAngle: 0, ringHp: 40, spawnOnEscape: 0, title: 'Kính vỡ sau 40 lần va', endText: 'KÍNH VỠ!' } },
   { id: 'escape-strings', mode: 'escape', label: 'Dây va chạm', overrides: { impactLines: 40, spawnOnEscape: 0, gapAngle: 12, trailLength: 0, glow: false, title: 'Mỗi lần chạm = 1 sợi dây' } },
+  { id: 'escape-portals', mode: 'escape', label: 'Cổng dịch chuyển', overrides: { portals: true, spawnOnEscape: 1, title: 'Đi qua cổng là sang phía bên kia!' } },
+  { id: 'escape-chaos', mode: 'escape', label: 'Biến cố', overrides: { spawnOnEscape: 0, gapAngle: 16, title: 'Chuyện gì sẽ xảy ra ở giây thứ 10?', chaos: [{ t: 10, kind: 'gravityFlip', value: 0 }, { t: 18, kind: 'blackHole', value: 3 }, { t: 25, kind: 'widenGap', value: 25 }] } },
   { id: 'escape-powerups', mode: 'escape', label: 'Vật phẩm', overrides: { powerups: true, powerupInterval: 2.5, title: 'Ăn vật phẩm để mạnh hơn' } },
   { id: 'grow-spikes', mode: 'grow', label: 'Lớn dần + gai', overrides: { spikeArc: 70, spikeEffect: 'destroy', rotationSpeed: 0, title: 'Đừng chạm gai!', endText: 'KẾT THÚC!' } },
+  { id: 'grow-magnet', mode: 'grow', label: 'Nam châm', overrides: { magnet: 900, gravity: 600, title: 'Nam châm ở giữa kéo bóng lại' } },
   { id: 'grow-strings', mode: 'grow', label: 'Lớn dần + dây', overrides: { impactLines: 64, impactMode: 'chain', trailLength: 0 } },
   { id: 'destruction-glass', mode: 'destruction', label: 'Vòng kính', overrides: { gapAngle: 0, ringHp: 6, ringCount: 10, title: 'Mỗi vòng chịu 6 lần va' } },
   { id: 'destruction-fast', mode: 'destruction', label: 'Tăng tốc', overrides: { speedBoost: 1.01, ringCount: 20, ringSpacing: 18 } },
@@ -340,6 +391,7 @@ export const VARIANTS: Variant[] = [
   { id: 'collision-mega', mode: 'collision', label: 'Nổ 1000 bóng', overrides: { explodeCount: 1000, ballCollisions: false } },
   { id: 'spiral-fast', mode: 'spiral', label: 'Xoắn nhanh', overrides: { spiralSpeed: 160, spiralTurns: 7, gemCount: 20 } },
   { id: 'trail-strings', mode: 'trail', label: 'Tô + dây', overrides: { impactLines: 30 } },
+  { id: 'koth-wind', mode: 'koth', label: 'Gió & biến cố', overrides: { chaos: [{ t: 8, kind: 'wind', value: 1600 }, { t: 15, kind: 'wind', value: -1600 }, { t: 22, kind: 'speedBurst', value: 1.5 }] } },
   { id: 'koth-8', mode: 'koth', label: '8 đội', overrides: { initialBalls: 8, ballRadius: 24, teamNames: 'Red, Blue, Green, Yellow, Orange, Purple, Pink, Cyan' } },
   { id: 'symmetric-100', mode: 'symmetric', label: '100 bóng', overrides: { initialBalls: 100, ballRadius: 6, trailLength: 10, title: '100 quả bóng, lệch nhau 0.01px' } },
 ];
@@ -350,7 +402,7 @@ export function parseResolution(res: string): { width: number; height: number } 
 }
 
 export function cloneConfig(c: Config): Config {
-  return { ...c, melody: c.melody.map((ch) => ch.slice()) };
+  return { ...c, melody: c.melody.map((ch) => ch.slice()), chaos: c.chaos.map((e) => ({ ...e })) };
 }
 
 /** Merge an untrusted object (e.g. a loaded preset file) onto defaults, keeping only known keys of the right type. */
@@ -361,6 +413,16 @@ export function sanitizeConfig(raw: unknown): Config {
   for (const key of Object.keys(DEFAULT_CONFIG) as (keyof Config)[]) {
     const v = src[key];
     if (v === undefined) continue;
+    if (key === 'chaos') {
+      if (Array.isArray(v)) {
+        out.chaos = v
+          .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+          .filter((e) => typeof e.t === 'number' && isFinite(e.t) && typeof e.value === 'number' && isFinite(e.value) && typeof e.kind === 'string' && e.kind in CHAOS_KINDS)
+          .slice(0, 8)
+          .map((e) => ({ t: e.t as number, kind: e.kind as ChaosKind, value: e.value as number }));
+      }
+      continue;
+    }
     if (key === 'melody') {
       if (Array.isArray(v)) {
         out.melody = v

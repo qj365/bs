@@ -215,7 +215,7 @@ export class CpuRenderer implements FrameRenderer {
       const [x, y, r, kind, life, pulse] = Array.from(data.powerups.subarray(o, o + POWERUP_STRIDE));
       const rr = r * (1 + 0.08 * pulse) * k;
       c.globalAlpha = Math.min(1, life * 4);
-      const col = this.hue(POWERUP_HUES[kind & 3], 0.58);
+      const col = this.hue(POWERUP_HUES[Math.min(6, Math.max(0, kind | 0))], 0.58);
       c.fillStyle = col;
       c.globalAlpha *= 0.28;
       c.beginPath();

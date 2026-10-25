@@ -1,5 +1,6 @@
 import {
-  cloneConfig, MODE_DEFAULTS, MODE_INFO, VARIANTS, type Config, type Instrument, type Mode, type ScaleName,
+  cloneConfig, MODE_DEFAULTS, MODE_INFO, VARIANTS, type ChaosEvent, type ChaosKind, type Config, type Instrument, type Mode,
+  type ScaleName,
 } from './config';
 import { MELODIES } from './audio/melodies';
 
@@ -36,7 +37,7 @@ export const PALETTES: Palette[] = [
   { name: 'Cầu vồng sáng', bg: '#f4f1ea', ring: '#202020', ball: '#ff3b6b', ringRainbow: false, colorMode: 'rainbow', text: '#111111' },
 ];
 
-const HOOKS: Record<Mode, Record<HookLang, string[]>> = {
+export const HOOKS: Record<Mode, Record<HookLang, string[]>> = {
   escape: {
     vi: ['Mỗi lần thoát ra = thêm 2 bóng', 'Bao lâu thì đầy màn hình?', 'Đừng để chúng thoát ra!', 'Đợi đến cuối nhé…'],
     en: ['Every escape = 2 more balls', 'How long until it fills up?', "Don't let them escape!", 'Wait for the end…'],
@@ -106,7 +107,28 @@ const MODE_WEIGHTS: Record<Mode, number> = {
   escape: 3, infinite: 2, grow: 2, destruction: 2, accumulation: 2, collision: 2, spiral: 2, trail: 1.5, merge: 1, koth: 2, symmetric: 1,
 };
 
-const INSTRUMENTS: Instrument[] = ['marimba', 'piano', 'bell', 'musicbox', 'harp', 'guitar', 'pluck', 'organ', 'synth', 'pop', 'chip'];
+const INSTRUMENTS: Instrument[] = [
+  'marimba', 'piano', 'bell', 'musicbox', 'harp', 'guitar', 'pluck', 'organ', 'synth', 'pop', 'chip', 'glass', 'marble', 'wood', 'drop',
+];
+
+/** A few well-spaced twists for a video of roughly `duration` seconds. */
+export function randomChaos(r: () => number, duration: number, mode: Mode): ChaosEvent[] {
+  const kinds: ChaosKind[] = ['gravityFlip', 'blackHole', 'wind', 'speedBurst', 'reverse', 'gravityScale'];
+  if (mode === 'escape' || mode === 'koth' || mode === 'destruction') kinds.push('widenGap');
+  if (mode === 'escape' || mode === 'infinite') kinds.push('spawn');
+  const n = 2 + Math.floor(r() * 2);
+  const out: ChaosEvent[] = [];
+  for (let k = 0; k < n; k++) {
+    const kind = kinds[Math.floor(r() * kinds.length) % kinds.length];
+    const t = Math.round(((k + 1) / (n + 1)) * Math.max(8, duration) * (0.85 + r() * 0.3));
+    const value = {
+      gravityFlip: 0, gravityScale: r() < 0.5 ? 2 : 0.4, blackHole: 2 + Math.round(r() * 2), wind: (r() < 0.5 ? -1 : 1) * 1500,
+      speedBurst: 1.5, spawn: 10, reverse: 0, widenGap: 20,
+    }[kind];
+    out.push({ t, kind, value });
+  }
+  return out;
+}
 const SCALES: ScaleName[] = ['pentatonic', 'major', 'minor', 'japanese', 'blues'];
 
 /** Modes whose runs end on their own (others just play for the chosen duration). */
@@ -192,6 +214,9 @@ export function randomConfig(base: Config, locks: RandomLocks, lang: HookLang, r
       cfg.teamNames = ['Red', 'Blue', 'Green', 'Yellow', 'Orange', 'Purple'].slice(0, n).join(', ');
     }
     // Occasional extras on top of the plain modes.
+    if (cfg.chaos.length === 0 && cfg.mode !== 'symmetric' && cfg.mode !== 'merge' && r() < 0.15) {
+      cfg.chaos = randomChaos(r, 30, cfg.mode);
+    }
     if (cfg.mode === 'escape' || cfg.mode === 'grow' || cfg.mode === 'destruction') {
       if (cfg.impactLines === 0 && r() < 0.15) cfg.impactLines = Math.round(range(r, 20, 50));
       if (!cfg.powerups && cfg.mode === 'escape' && r() < 0.15) cfg.powerups = true;

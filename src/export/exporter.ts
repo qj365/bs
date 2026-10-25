@@ -1,6 +1,6 @@
 import type { Config } from '../config';
 import { renderSoundtrack } from '../audio/synth';
-import type { WorkerIn, WorkerOut } from './protocol';
+import type { ExportPlan, WorkerIn, WorkerOut } from './protocol';
 
 export interface ExportProgress {
   frame: number;
@@ -16,6 +16,9 @@ export interface ExportResult {
   duration: number;
   video: string;
   audio: string;
+  cover?: Blob;
+  /** When the run finished, in output-video seconds (-1 if it didn't). */
+  finishTime: number;
 }
 
 export interface ExportJob {
@@ -28,7 +31,7 @@ export interface ExportJob {
  * The soundtrack is rendered here (OfflineAudioContext is not available in workers)
  * and handed back to the worker for encoding.
  */
-export function startExport(cfg: Config, onProgress: (p: ExportProgress) => void): ExportJob {
+export function startExport(cfg: Config, plan: ExportPlan, onProgress: (p: ExportProgress) => void): ExportJob {
   const worker = new Worker(new URL('./export.worker.ts', import.meta.url), { type: 'module' });
   let rejectFn: (e: Error) => void = () => {};
   const promise = new Promise<ExportResult>((resolve, reject) => {
@@ -51,7 +54,7 @@ export function startExport(cfg: Config, onProgress: (p: ExportProgress) => void
         case 'need-audio':
           try {
             onProgress({ frame: 1, total: 1, fps: 0, status: 'Đang dựng âm thanh…' });
-            const buf = await renderSoundtrack(cfg, m.events, m.duration);
+            const buf = await renderSoundtrack(cfg, m.events, m.duration, { musicOffset: m.musicOffset });
             const left = buf.getChannelData(0).slice();
             const right = buf.getChannelData(1).slice();
             send({ type: 'audio', left, right }, [left.buffer, right.buffer]);
@@ -69,6 +72,8 @@ export function startExport(cfg: Config, onProgress: (p: ExportProgress) => void
             duration: m.duration,
             video: m.video,
             audio: m.audio,
+            cover: m.cover ? new Blob([m.cover], { type: 'image/png' }) : undefined,
+            finishTime: m.finishTime,
           });
           break;
         case 'error':
@@ -81,7 +86,7 @@ export function startExport(cfg: Config, onProgress: (p: ExportProgress) => void
       worker.terminate();
       reject(new Error(e.message || 'Worker lỗi'));
     };
-    send({ type: 'start', cfg });
+    send({ type: 'start', cfg, plan });
   });
   return {
     promise,

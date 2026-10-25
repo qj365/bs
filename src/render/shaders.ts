@@ -35,7 +35,8 @@ out vec3 vColor;
 out float vAlpha;
 out float vRadiusPx;
 flat out float vFrozen;
-const float POWERUP_HUES[4] = float[4](130.0, 48.0, 205.0, 290.0);
+// split, speed, grow, shrink, portal A, portal B, magnet / black hole
+const float POWERUP_HUES[7] = float[7](130.0, 48.0, 205.0, 290.0, 28.0, 210.0, 285.0);
 void main() {
   float r = aA.z;
   vFrozen = 0.0;
@@ -50,7 +51,7 @@ void main() {
     vColor = hsl2rgb(aA.w + aB.y * 25.0, 0.85, 0.72);
     vAlpha = aB.x;
   } else {
-    vColor = hsl2rgb(POWERUP_HUES[int(aA.w) & 3], 0.9, 0.58);
+    vColor = hsl2rgb(POWERUP_HUES[clamp(int(aA.w), 0, 6)], 0.9, 0.58);
     vAlpha = clamp(aB.x * 4.0, 0.0, 1.0);
     r *= 1.0 + 0.08 * aB.y;
   }

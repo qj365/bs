@@ -39,5 +39,6 @@ export function wallColor(cfg: Config, time: number): [number, number, number] {
   return cfg.ringRainbow ? hslToRgb(((time * 40) % 360 + 360) % 360, 0.9, 0.6) : hexToRgb(cfg.ringColor);
 }
 
-export const POWERUP_HUES = [130, 48, 205, 290];
+/** split, speed, grow, shrink, portal A, portal B, magnet / black hole */
+export const POWERUP_HUES = [130, 48, 205, 290, 28, 210, 285];
 export const POWERUP_ICONS = ['×2', '⚡', '⬆', '⬇'];

@@ -117,12 +117,12 @@ button.primary:hover:not(:disabled) { background: var(--accent-2); }
   gap: 10px;
   overflow-y: auto;
 }
-.canvas-wrap { width: 100%; display: flex; justify-content: center; }
-.canvas-box { position: relative; display: inline-flex; line-height: 0; }
+/* Fixed height so swapping the preview canvas never shifts the controls below. */
+.canvas-wrap { width: 100%; height: min(62vh, 760px); min-height: 300px; display: flex; justify-content: center; }
+.canvas-box { position: relative; display: inline-flex; height: 100%; line-height: 0; }
 .canvas-box canvas {
   max-width: 100%;
-  height: min(62vh, 760px);
-  min-height: 300px;
+  height: 100%;
   width: auto;
   border-radius: 10px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
@@ -160,6 +160,16 @@ button.primary:hover:not(:disabled) { background: var(--accent-2); }
   flex-direction: column;
   gap: 8px;
 }
+.viral-card { border-color: color-mix(in srgb, #7c5cff 45%, var(--border)); }
+.tool { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px dashed var(--border); }
+.tool:first-of-type { border-top: 0; padding-top: 0; }
+.tool-title { font-weight: 700; font-size: 13px; }
+.tool textarea { width: 100%; }
+#drama-min, #drama-max, #loop-min, #loop-max { width: 60px; }
+.chaos-editor { width: min(720px, 96vw); }
+.ce-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.ce-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ce-row input[type='number'] { width: 80px; }
 .random-card { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .lock-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .lock-row input { width: 16px; height: 16px; accent-color: var(--accent); }
@@ -209,6 +219,6 @@ kbd { background: var(--panel-3); border: 1px solid var(--border); border-radius
 @media (max-width: 900px) {
   main { flex-direction: column-reverse; }
   aside { width: 100%; border-right: 0; border-top: 1px solid var(--border); }
-  .canvas-box canvas { height: auto; max-height: 70vh; }
+  .canvas-wrap { height: 70vh; }
   .mode-grid { grid-template-columns: repeat(4, 1fr); }
 }

@@ -1,5 +1,5 @@
 import wasmUrl from './wasm/ball_sim.wasm?url';
-import { type Config, type Mode, parseResolution } from './config';
+import { type ChaosKind, type Config, type Mode, parseResolution } from './config';
 
 // Parameter slots — must match the P_* constants in sim/src/lib.rs.
 const P = {
@@ -9,9 +9,15 @@ const P = {
   gravity: 20, restitution: 21, speedBoost: 22, initialSpeed: 23, maxSpeed: 24, ballCollisions: 25,
   spikeArc: 26, spikeEffect: 27, spikeSize: 28, ringHp: 29, powerups: 30, powerupInterval: 31,
   impactLines: 32, explodeCount: 33, spiralTurns: 34, spiralSpeed: 35, gemCount: 36, impactMode: 37,
-  teamCount: 38, teamHues: 39,
+  portals: 38, portalSize: 39, magnet: 40, wind: 41, chaosCount: 42, chaos: 43,
+  teamCount: 43 + 8 * 3, teamHues: 43 + 8 * 3 + 1,
 } as const;
 const MAX_TEAMS = 16;
+const MAX_CHAOS = 8;
+const CHAOS_INDEX: Record<ChaosKind, number> = {
+  gravityFlip: 0, gravityScale: 1, blackHole: 2, wind: 3, speedBurst: 4, spawn: 5, reverse: 6, widenGap: 7,
+};
+export const CHAOS_BY_INDEX = Object.keys(CHAOS_INDEX) as ChaosKind[];
 
 const MODE_INDEX: Record<Mode, number> = {
   escape: 0, grow: 1, destruction: 2, trail: 3, merge: 4, koth: 5, symmetric: 6,
@@ -26,10 +32,14 @@ export const RING_STRIDE = 12;
 export const PARTICLE_STRIDE = 6;
 export const GEM_STRIDE = 6;
 export const POWERUP_STRIDE = 6;
-export const EVENT_STRIDE = 6;
+export const EVENT_STRIDE = 7;
 
-export type EventKind = 'bounce' | 'hit' | 'escape' | 'break' | 'merge' | 'finish' | 'powerup' | 'spike' | 'explode' | 'gem';
-const EVENT_KINDS: EventKind[] = ['bounce', 'hit', 'escape', 'break', 'merge', 'finish', 'powerup', 'spike', 'explode', 'gem'];
+export type EventKind =
+  | 'bounce' | 'hit' | 'escape' | 'break' | 'merge' | 'finish' | 'powerup' | 'spike' | 'explode' | 'gem'
+  | 'nearmiss' | 'chaos' | 'portal';
+const EVENT_KINDS: EventKind[] = [
+  'bounce', 'hit', 'escape', 'break', 'merge', 'finish', 'powerup', 'spike', 'explode', 'gem', 'nearmiss', 'chaos', 'portal',
+];
 
 export interface SimEvent {
   t: number;
@@ -38,6 +48,10 @@ export interface SimEvent {
   r: number;
   level: number;
   team: number;
+  /** Horizontal position in world units (for stereo panning). */
+  x: number;
+  /** Which arena produced it (split-screen battles); 0 otherwise. */
+  arena?: number;
 }
 
 export interface RenderData {
@@ -74,6 +88,11 @@ export interface Stats {
   frozen: number;
   multiplier: number;
   glass: number;
+  nearMisses: number;
+  lastNearMiss: number;
+  lastChaosKind: number;
+  lastChaosTime: number;
+  blackHole: boolean;
 }
 
 interface SimExports {
@@ -232,6 +251,17 @@ export class Simulation {
     params[P.spiralTurns] = cfg.spiralTurns;
     params[P.spiralSpeed] = cfg.spiralSpeed;
     params[P.gemCount] = cfg.gemCount;
+    params[P.portals] = cfg.portals ? 1 : 0;
+    params[P.portalSize] = cfg.portalSize;
+    params[P.magnet] = cfg.magnet;
+    params[P.wind] = cfg.wind;
+    const chaos = cfg.chaos.slice(0, MAX_CHAOS);
+    params[P.chaosCount] = chaos.length;
+    chaos.forEach((e, k) => {
+      params[P.chaos + k * 3] = e.t;
+      params[P.chaos + k * 3 + 1] = CHAOS_INDEX[e.kind];
+      params[P.chaos + k * 3 + 2] = e.value;
+    });
     const hues = cfg.mode === 'koth' || cfg.mode === 'collision' ? teamHues(cfg) : [];
     params[P.teamCount] = hues.length;
     hues.forEach((h, i) => (params[P.teamHues + i] = h));
@@ -261,7 +291,7 @@ export class Simulation {
     const out: SimEvent[] = new Array(n);
     for (let i = 0; i < n; i++) {
       const o = i * EVENT_STRIDE;
-      out[i] = { t: f[o], kind: EVENT_KINDS[f[o + 1]] ?? 'bounce', strength: f[o + 2], r: f[o + 3], level: f[o + 4], team: f[o + 5] };
+      out[i] = { t: f[o], kind: EVENT_KINDS[f[o + 1]] ?? 'bounce', strength: f[o + 2], r: f[o + 3], level: f[o + 4], team: f[o + 5], x: f[o + 6] };
     }
     this.e.clear_events();
     return out;
@@ -317,6 +347,11 @@ export class Simulation {
       frozen: s(11),
       multiplier: s(12),
       glass: s(13),
+      nearMisses: s(14),
+      lastNearMiss: s(15),
+      lastChaosKind: s(16),
+      lastChaosTime: s(17),
+      blackHole: s(18) === 1,
     };
   }
 }

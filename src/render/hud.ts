@@ -9,6 +9,10 @@ export interface HudState {
   /** Power-up records (x y r kind …) from the simulation, for drawing their icons. */
   powerups?: Float32Array;
   powerupCount?: number;
+  /** Short-lived announcement (timeline events), shown under the title. */
+  banner?: string;
+  /** Caption over the lower part of the frame (e.g. "Xem phần 2 👀"). */
+  overlay?: string;
 }
 
 type Canvas2D = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
@@ -39,11 +43,11 @@ export class Hud {
     for (let i = 0; i < (s.powerupCount ?? 0); i++) {
       const o = i * POWERUP_STRIDE;
       const p = s.powerups!;
-      icons.push(Math.round(p[o]), Math.round(p[o + 1]), Math.round(p[o + 2]), p[o + 3]);
+      if (p[o + 3] < 4) icons.push(Math.round(p[o]), Math.round(p[o + 1]), Math.round(p[o + 2]), p[o + 3]);
     }
     const key = [
       cfg.title, cfg.titleSize, cfg.textColor, counter, timer, s.end, cfg.ringRadius,
-      cfg.watermark, cfg.watermarkPos, cfg.watermarkOpacity, layout.cy, icons.join(','),
+      cfg.watermark, cfg.watermarkPos, cfg.watermarkOpacity, layout.cy, icons.join(','), s.banner ?? '', s.overlay ?? '',
     ].join('\u0001');
     if (key === this.key) return;
     this.key = key;
@@ -55,7 +59,7 @@ export class Hud {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
-    this.empty = !cfg.title && !counter && !timer && !s.end && !cfg.watermark && icons.length === 0;
+    this.empty = !cfg.title && !counter && !timer && !s.end && !cfg.watermark && icons.length === 0 && !s.banner && !s.overlay;
     const midX = ((layout.safe.left + layout.W - layout.safe.right) / 2) * k;
 
     const size = cfg.titleSize * k;
@@ -113,6 +117,21 @@ export class Hud {
       ctx.restore();
     }
 
+    if (s.banner) {
+      const bs = size * 0.62;
+      ctx.font = `900 ${bs}px ${FONT_FAMILY}`;
+      const w = Math.min(this.width * 0.9, ctx.measureText(s.banner).width + bs * 1.2);
+      const y = Math.max(layout.safe.top * k + bs, (layout.cy - cfg.ringRadius) * k - bs * 0.2);
+      ctx.fillStyle = 'rgba(255,59,107,0.85)';
+      roundRect(ctx, midX - w / 2, y - bs * 0.75, w, bs * 1.5, bs * 0.5);
+      ctx.fill();
+      this.outlined(s.banner, midX, y, bs, '#ffffff');
+    }
+
+    if (s.overlay) {
+      drawOverlay(ctx, s.overlay, midX, bottomLimit - size * 2.2, size, this.width);
+    }
+
     if (s.end) {
       const big = size * 1.35;
       ctx.font = `900 ${big}px ${FONT_FAMILY}`;
@@ -140,6 +159,45 @@ export class Hud {
     ctx.fillStyle = color;
     ctx.fillText(text, x, y);
   }
+}
+
+/** Big caption on a dark pill, used for "Part 2" style call-outs. */
+export function drawOverlay(ctx: Canvas2D, text: string, x: number, y: number, size: number, maxWidth: number): void {
+  const os = size * 1.05;
+  ctx.save();
+  ctx.font = `900 ${os}px ${FONT_FAMILY}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  const w = Math.min(maxWidth * 0.92, ctx.measureText(text).width + os * 1.4);
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  roundRect(ctx, x - w / 2, y - os * 0.85, w, os * 1.7, os * 0.5);
+  ctx.fill();
+  ctx.lineWidth = os * 0.16;
+  ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+export function drawTitle(ctx: Canvas2D, text: string, x: number, y: number, size: number, color: string, maxWidth: number): void {
+  ctx.save();
+  ctx.font = `800 ${size}px ${FONT_FAMILY}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  const lines = wrap(ctx, text, maxWidth);
+  let ly = y - ((lines.length - 1) * size * 1.18) / 2;
+  for (const line of lines) {
+    ctx.lineWidth = size * 0.16;
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+    ctx.strokeText(line, x, ly);
+    ctx.fillStyle = color;
+    ctx.fillText(line, x, ly);
+    ly += size * 1.18;
+  }
+  ctx.restore();
 }
 
 function wrap(ctx: Canvas2D, text: string, maxWidth: number): string[] {

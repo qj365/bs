@@ -66,6 +66,50 @@ export function playNote(
       src.stop(when + Math.min(sample.buffer.duration, 4));
       break;
     }
+    case 'glass': {
+      // Glass clink: bright inharmonic partials with a tiny click.
+      for (const [mul, amp, dec] of [[1, 0.22, 1.2], [2.76, 0.12, 0.7], [5.4, 0.08, 0.35], [8.9, 0.05, 0.2]] as const) {
+        const g = envelope(ctx, when, amp * v, dec);
+        g.connect(out);
+        osc(ctx, 'sine', f * 2 * mul, when, dec, g);
+      }
+      break;
+    }
+    case 'marble': {
+      // Marble tap: a short noisy click plus a damped knock.
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBuffer(ctx);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(Math.min(f * 6, 9000), when);
+      bp.Q.value = 6;
+      const g = envelope(ctx, when, 0.9 * v, 0.06);
+      src.connect(bp).connect(g).connect(out);
+      src.start(when);
+      src.stop(when + 0.08);
+      const g2 = envelope(ctx, when, 0.25 * v, 0.18);
+      g2.connect(out);
+      osc(ctx, 'sine', f * 1.5, when, 0.18, g2);
+      break;
+    }
+    case 'wood': {
+      const g = envelope(ctx, when, 0.5 * v, 0.12);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(f * 2, when);
+      bp.Q.value = 8;
+      g.connect(bp).connect(out);
+      osc(ctx, 'triangle', f * 2, when, 0.12, g);
+      break;
+    }
+    case 'drop': {
+      // Water drop: a sine sweeping quickly upwards.
+      const g = envelope(ctx, when, 0.45 * v, 0.16);
+      g.connect(out);
+      const o = osc(ctx, 'sine', f * 0.8, when, 0.16, g);
+      o.frequency.exponentialRampToValueAtTime(f * 2.4, when + 0.07);
+      break;
+    }
     case 'guitar': {
       // Bright pluck through a body-like resonant filter.
       const g = envelope(ctx, when, 0.3 * v, 1.1);
@@ -305,8 +349,29 @@ export class SoundPlayer {
   private lastNote = -Infinity;
   private lastSfx = -Infinity;
 
+  private panners = new Map<number, AudioNode>();
+
   constructor(private ctx: BaseAudioContext, private out: AudioNode, private cfg: Config, private sample: SampleVoice | null = null) {
     this.picker = new NotePicker(cfg);
+  }
+
+  /**
+   * Stereo: sounds follow the ball left/right. Positions are bucketed into a few
+   * shared panners so thousands of bounces don't create thousands of nodes.
+   */
+  private destFor(e: SimEvent): AudioNode {
+    const pan = (e as SimEvent & { pan?: number }).pan;
+    if (!this.cfg.stereo || pan === undefined || !Number.isFinite(pan)) return this.out;
+    const bucket = Math.round(Math.max(-1, Math.min(1, pan)) * 4) / 4;
+    let node = this.panners.get(bucket);
+    if (!node) {
+      const p = this.ctx.createStereoPanner();
+      p.pan.value = bucket * 0.85;
+      p.connect(this.out);
+      this.panners.set(bucket, p);
+      node = p;
+    }
+    return node;
   }
 
   /** Advances the melody without making sound (used when seeking the preview). */
@@ -324,11 +389,12 @@ export class SoundPlayer {
   handle(e: SimEvent, when: number): void {
     const cfg = this.cfg;
     if (!cfg.sound) return;
+    const out = this.destFor(e);
     const vel = e.kind === 'bounce' || e.kind === 'hit' ? 0.45 + Math.min(e.strength / 2000, 0.55) : 0.85;
     const notes = () => {
       if (when - this.lastNote < cfg.minNoteGap) return;
       this.lastNote = when;
-      for (const n of this.picker.next(e)) playNote(this.ctx, this.out, cfg.instrument, n, when, vel, this.sample);
+      for (const n of this.picker.next(e)) playNote(this.ctx, out, cfg.instrument, n, when, vel, this.sample);
     };
     switch (e.kind) {
       case 'bounce':
@@ -341,40 +407,71 @@ export class SoundPlayer {
       case 'break':
         if (cfg.sfx && when - this.lastSfx > 0.05) {
           this.lastSfx = when;
-          playBreak(this.ctx, this.out, when);
+          playBreak(this.ctx, out, when);
         }
         notes();
         break;
       case 'escape':
         if (cfg.sfx && when - this.lastSfx > 0.05) {
           this.lastSfx = when;
-          playWhoosh(this.ctx, this.out, when);
+          playWhoosh(this.ctx, out, when);
         }
         break;
       case 'gem':
         notes();
-        if (cfg.sfx) playChime(this.ctx, this.out, when, cfg.baseNote + 24);
+        if (cfg.sfx) playChime(this.ctx, out, when, cfg.baseNote + 24);
         break;
       case 'powerup':
-        if (cfg.sfx) playChime(this.ctx, this.out, when, cfg.baseNote + 12 + e.level * 2);
+        if (cfg.sfx) playChime(this.ctx, out, when, cfg.baseNote + 12 + e.level * 2);
         break;
       case 'spike':
         if (cfg.sfx && when - this.lastSfx > 0.05) {
           this.lastSfx = when;
-          if (cfg.mode === 'accumulation') playNote(this.ctx, this.out, 'pop', cfg.baseNote + 7, when, 0.8);
-          else playBreak(this.ctx, this.out, when);
+          if (cfg.mode === 'accumulation') playNote(this.ctx, out, 'pop', cfg.baseNote + 7, when, 0.8);
+          else playBreak(this.ctx, out, when);
         }
         break;
       case 'explode':
-        if (cfg.sfx) playBoom(this.ctx, this.out, when);
+        if (cfg.sfx) playBoom(this.ctx, out, when);
         break;
       case 'finish':
         if (cfg.sfx) {
           const base = cfg.baseNote + cfg.transpose + 12;
-          [0, 4, 7, 12].forEach((iv, i) => playNote(this.ctx, this.out, cfg.instrument, base + iv, when + i * 0.09, 0.9, this.sample));
+          [0, 4, 7, 12].forEach((iv, i) => playNote(this.ctx, out, cfg.instrument, base + iv, when + i * 0.09, 0.9, this.sample));
         }
         break;
     }
+  }
+}
+
+/** Background music for beat-synced videos (kept in memory; persisted by the UI). */
+let music: { name: string; data: ArrayBuffer } | null = null;
+const musicCache = new WeakMap<BaseAudioContext, { data: ArrayBuffer; buffer: AudioBuffer }>();
+
+export function setMusic(name: string, data: ArrayBuffer | null): void {
+  music = data ? { name, data } : null;
+}
+
+export function musicName(): string {
+  return music?.name ?? '';
+}
+
+export function hasMusic(): boolean {
+  return music !== null;
+}
+
+/** Decodes the background music for a context (cached per context). */
+export async function decodeMusic(ctx: BaseAudioContext): Promise<AudioBuffer | null> {
+  if (!music) return null;
+  const cached = musicCache.get(ctx);
+  if (cached && cached.data === music.data) return cached.buffer;
+  try {
+    const buffer = await ctx.decodeAudioData(music.data.slice(0));
+    musicCache.set(ctx, { data: music.data, buffer });
+    return buffer;
+  } catch (err) {
+    console.warn('Không giải mã được file nhạc:', err);
+    return null;
   }
 }
 
@@ -401,11 +498,28 @@ async function decodeSample(ctx: BaseAudioContext, cfg: Config): Promise<SampleV
   }
 }
 
-/** Renders the whole soundtrack offline (much faster than real time) for export. */
-export async function renderSoundtrack(cfg: Config, events: SimEvent[], duration: number, sampleRate = 48000): Promise<AudioBuffer> {
+/**
+ * Renders the whole soundtrack offline (much faster than real time) for export.
+ * Event times must already be in output-video seconds. `musicOffset` is where in
+ * the song the video starts (for clips cut from the middle).
+ */
+export async function renderSoundtrack(
+  cfg: Config, events: SimEvent[], duration: number, opts: { musicOffset?: number; sampleRate?: number } = {},
+): Promise<AudioBuffer> {
+  const sampleRate = opts.sampleRate ?? 48000;
   const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(duration * sampleRate)), sampleRate);
-  const player = new SoundPlayer(ctx, buildMaster(ctx, cfg), cfg, await decodeSample(ctx, cfg));
-  for (const e of events) if (e.t < duration) player.handle(e, e.t);
+  const master = buildMaster(ctx, cfg);
+  const player = new SoundPlayer(ctx, master, cfg, await decodeSample(ctx, cfg));
+  for (const e of events) if (e.t >= 0 && e.t < duration) player.handle(e, e.t);
+  const song = cfg.musicVolume > 0 ? await decodeMusic(ctx) : null;
+  if (song) {
+    const src = ctx.createBufferSource();
+    src.buffer = song;
+    const g = ctx.createGain();
+    g.gain.value = cfg.musicVolume;
+    src.connect(g).connect(ctx.destination);
+    src.start(0, Math.max(0, opts.musicOffset ?? 0));
+  }
   return ctx.startRendering();
 }
 
@@ -434,10 +548,41 @@ export class LiveAudio {
     this.player?.skip(events);
   }
 
-  /** Schedules events that happened at sim time e.t, given the sim time now. */
-  play(events: SimEvent[], simNow: number): void {
+  /**
+   * Schedules events. `videoTimeOf` maps an event's sim time to video time
+   * (identity unless the video is time-warped to the music); `videoNow` is now.
+   */
+  play(events: SimEvent[], videoNow: number, videoTimeOf: (simT: number) => number = (t) => t): void {
     if (!this.player || this.ctx.state !== 'running') return;
     const base = this.ctx.currentTime + 0.03;
-    for (const e of events) this.player.handle(e, Math.max(this.ctx.currentTime, base + (e.t - simNow)));
+    for (const e of events) this.player.handle(e, Math.max(this.ctx.currentTime, base + (videoTimeOf(e.t) - videoNow)));
+  }
+
+  private song: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+
+  /** Plays the background music from `offset` seconds (stops any previous playback). */
+  async startMusic(offset: number, volume: number): Promise<void> {
+    this.stopMusic();
+    if (volume <= 0) return;
+    const buffer = await decodeMusic(this.ctx);
+    if (!buffer || offset >= buffer.duration) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    const gain = this.ctx.createGain();
+    gain.gain.value = volume;
+    src.connect(gain).connect(this.ctx.destination);
+    src.start(this.ctx.currentTime + 0.03, Math.max(0, offset));
+    this.song = { src, gain };
+  }
+
+  stopMusic(): void {
+    if (!this.song) return;
+    try {
+      this.song.src.stop();
+    } catch {
+      // Already stopped.
+    }
+    this.song.src.disconnect();
+    this.song = null;
   }
 }

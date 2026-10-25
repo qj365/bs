@@ -24,6 +24,8 @@ export function startSearch(
       const m = ev.data;
       if (m.type === 'progress') {
         onProgress?.(m);
+      } else if (m.type === 'loop') {
+        // Not produced by seed searches.
       } else if (m.type === 'done') {
         worker.terminate();
         resolve(m.results);
@@ -50,4 +52,27 @@ export async function findSeedInWindow(cfg: Config, minS: number, maxS: number, 
   const target = (minS + maxS) / 2;
   const results = await startSearch(cfg, { kind: 'duration', value: target }, cfg.seed, tries).promise;
   return results.find((r) => r.finishTime >= minS && r.finishTime <= maxS) ?? null;
+}
+
+/** Finds the most seamless loop segment of the current run (in a worker). */
+export function findLoopInWorker(cfg: Config, minLen: number, maxLen: number): Promise<{ start: number; end: number; error: number } | null> {
+  const worker = new Worker(new URL('./search.worker.ts', import.meta.url), { type: 'module' });
+  return new Promise((resolve, reject) => {
+    worker.onmessage = (ev: MessageEvent<SearchOut>) => {
+      const m = ev.data;
+      if (m.type === 'loop') {
+        worker.terminate();
+        resolve(m.result);
+      } else if (m.type === 'error') {
+        worker.terminate();
+        reject(new Error(m.message));
+      }
+    };
+    worker.onerror = (e) => {
+      worker.terminate();
+      reject(new Error(e.message || 'Worker lỗi'));
+    };
+    const msg: SearchIn = { type: 'loop', cfg: cloneConfig(cfg), minLen, maxLen, seconds: Math.min(120, maxLen + 40) };
+    worker.postMessage(msg);
+  });
 }

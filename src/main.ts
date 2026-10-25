@@ -3,14 +3,22 @@ import {
   cloneConfig, DEFAULT_CONFIG, MODE_DEFAULTS, MODE_INFO, parseResolution, sanitizeConfig, VARIANTS, type Config, type Mode,
 } from './config';
 import { MELODIES } from './audio/melodies';
-import { setUserSample, userSampleName } from './audio/synth';
+import { musicName, setMusic, setUserSample, userSampleName } from './audio/synth';
 import { formatTime } from './render/hud';
 import { computeLayout, SAFE_ZONES } from './sim';
 import { pickAudioCodec, pickVideoCodec } from './export/codecs';
 import { startExport, type ExportJob } from './export/exporter';
+import type { ExportPlan } from './export/protocol';
 import type { SearchResult } from './search/protocol';
-import { findSeedInWindow, startSearch, type SearchJob } from './search/client';
-import { modeFinishes, randomConfig, type HookLang, type RandomLocks } from './random';
+import { findLoopInWorker, findSeedInWindow, startSearch, type SearchJob } from './search/client';
+import { modeFinishes, randomConfig, type HookLang, type RandomLocks, type RandomResult } from './random';
+import { Scene } from './scene';
+import { unwarpTime, warpTime, type Warp } from './sync';
+import { analyzeMusic, computeBeatWarp, type MusicAnalysis } from './viral/beatsync';
+import { makeCaption } from './viral/caption';
+import { abVariants, coverTime, partPlans, probeFinish, type ABKind } from './viral/plans';
+import { parsePrompt } from './viral/prompt';
+import { ChaosEditor } from './ui/chaos-editor';
 import { MidiEditor } from './ui/midi-editor';
 import { Panel } from './ui/panel';
 import { Preview } from './ui/preview';
@@ -19,7 +27,7 @@ import { idbGet, idbSet, lsGet, lsSet } from './ui/storage';
 const STORAGE_KEY = 'ball-studio-config-v2';
 const AUDIO_KEYS = new Set<keyof Config>([
   'sound', 'instrument', 'noteMode', 'melodyName', 'scale', 'baseNote', 'transpose', 'volume', 'reverb',
-  'sampleBaseNote', 'minNoteGap', 'ballHitSound', 'sfx',
+  'sampleBaseNote', 'minNoteGap', 'ballHitSound', 'sfx', 'stereo', 'musicVolume',
 ]);
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -90,7 +98,8 @@ const preview = new Preview(
     if (now - lastStats > 250) {
       lastStats = now;
       $('time-label').textContent = `${formatTime(t.time)} / ${formatTime(t.end)}`;
-      const done = t.stats.finished ? ` · ✅ kết thúc ở ${t.stats.finishTime.toFixed(1)}s` : '';
+      const who = t.stats.winner >= 0 ? ` · 🏆 ${String.fromCharCode(65 + t.stats.winner)}` : '';
+      const done = t.stats.finished ? ` · ✅ kết thúc ở ${unwarpTime(warp, t.stats.finishTime).toFixed(1)}s${who}` : '';
       $('stats').textContent = `${t.stats.alive} bóng · ${t.fps.toFixed(0)} fps${done}`;
       $('renderer-badge').textContent = `Vẽ: ${t.renderer.toUpperCase()}`;
     }
@@ -98,10 +107,37 @@ const preview = new Preview(
   (msg) => toast(msg),
 );
 
+// ---------------------------------------------------------------- music & beat sync
+
+let music: MusicAnalysis | null = null;
+let warp: Warp | null = null;
+let beatInfo = '';
+
+/** Recomputes the beat-sync warp for the current settings and hands it to the preview. */
+async function updateTiming(): Promise<void> {
+  warp = null;
+  beatInfo = '';
+  if (music && cfg.beatSync) {
+    const bw = await computeBeatWarp(cfg, music);
+    if (bw && bw.matched > 0) {
+      warp = bw.warp;
+      beatInfo = `khớp ${bw.matched}/${bw.considered} nhịp (mỗi ${bw.stride} nhịp)`;
+    }
+  }
+  preview.setTiming(warp, music && cfg.beatSync ? music.duration : Infinity);
+  panel?.refreshInfo();
+}
+
+async function restartPreview(): Promise<void> {
+  await updateTiming();
+  await preview.restart();
+  updateSafeOverlay();
+}
+
 let restartTimer = 0;
 function scheduleRestart(): void {
   clearTimeout(restartTimer);
-  restartTimer = window.setTimeout(() => void preview.restart().then(updateSafeOverlay), 120);
+  restartTimer = window.setTimeout(() => void restartPreview(), 120);
 }
 
 async function userAction(fn: () => Promise<void> | void): Promise<void> {
@@ -114,7 +150,7 @@ $('btn-play').addEventListener('click', () => void userAction(() => preview.togg
 $('btn-restart').addEventListener('click', () => void userAction(restartAndPlay));
 
 async function restartAndPlay(): Promise<void> {
-  await preview.restart();
+  await restartPreview();
   preview.setPlaying(true);
 }
 
@@ -200,6 +236,7 @@ async function applyPreset(mode: Mode, overrides: Partial<Config>): Promise<void
 // ---------------------------------------------------------------- settings panel
 
 const midiEditor = new MidiEditor();
+const chaosEditor = new ChaosEditor();
 
 function currentMelody(): number[][] {
   if (cfg.melodyName === 'custom' && cfg.melody.length > 0) return cfg.melody;
@@ -232,6 +269,34 @@ const panel = new Panel($('panel'), cfg, {
         void preview.resetAudio();
         toast(`Đã dùng giai điệu ${melody.length} nốt`);
       });
+    } else if (name === 'chaos') {
+      chaosEditor.open(cfg, (events) => {
+        cfg.chaos = events;
+        panel.refresh();
+        save();
+        recordHistory();
+        scheduleRestart();
+        toast(events.length ? `Đã lưu ${events.length} biến cố` : 'Đã xóa biến cố');
+      });
+    } else if (name === 'music') {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'audio/*';
+      input.addEventListener('change', async () => {
+        const f = input.files?.[0];
+        if (!f) return;
+        if (f.size > 40 * 1024 * 1024) {
+          toast('File nhạc quá lớn (tối đa 40 MB).');
+          return;
+        }
+        try {
+          await loadMusic(f.name, await f.arrayBuffer(), true);
+          toast(`Đã nạp "${f.name}" · ${music!.bpm.toFixed(0)} BPM`);
+        } catch {
+          toast('Không đọc được file nhạc.');
+        }
+      });
+      input.click();
     } else if (name === 'sample') {
       const input = document.createElement('input');
       input.type = 'file';
@@ -258,9 +323,22 @@ const panel = new Panel($('panel'), cfg, {
   actionInfo(name) {
     if (name === 'sample') return userSampleName() ? `Đang dùng: ${userSampleName()}` : 'Chưa có file';
     if (name === 'editor') return cfg.melodyName === 'custom' && cfg.melody.length ? `${cfg.melody.length} nốt` : '';
+    if (name === 'chaos') return cfg.chaos.length ? `${cfg.chaos.length} biến cố` : 'Chưa có';
+    if (name === 'music') {
+      if (!music) return 'Chưa có nhạc nền';
+      return `${musicName()} · ${music.bpm.toFixed(0)} BPM · ${music.duration.toFixed(0)}s${beatInfo ? ' · ' + beatInfo : ''}`;
+    }
     return '';
   },
 });
+
+async function loadMusic(name: string, data: ArrayBuffer, persist: boolean): Promise<void> {
+  music = await analyzeMusic(data);
+  setMusic(name, data);
+  if (persist) void idbSet('music', { name, data });
+  await restartPreview();
+  await preview.resetAudio();
+}
 
 const filter = $<HTMLInputElement>('settings-filter');
 filter.addEventListener('input', () => panel.setFilter(filter.value));
@@ -273,8 +351,7 @@ async function replaceConfig(next: Config, record = true): Promise<void> {
   save();
   if (record) recordHistory();
   updateInfo();
-  updateSafeOverlay();
-  await preview.restart();
+  await restartPreview();
   await preview.resetAudio();
 }
 
@@ -322,11 +399,23 @@ function updateInfo(): void {
     `vẽ ${cfg.renderer.toUpperCase()} · mã hóa ${cfg.encoder.toUpperCase()}`;
 }
 
-async function runExport(over: Partial<Config>, label: string, prefix: string): Promise<boolean> {
+function captionLang(): HookLang {
+  return $<HTMLSelectElement>('rand-lang').value === 'en' ? 'en' : 'vi';
+}
+
+async function runExport(over: Partial<Config>, label: string, prefix: string, plan: ExportPlan = {}): Promise<boolean> {
   const c = { ...cloneConfig(cfg), ...over };
   const bar = $<HTMLProgressElement>('export-bar');
   const status = $('export-status');
-  job = startExport(c, (p) => {
+  const ep: ExportPlan = { ...plan, music: music !== null };
+  if (ep.warp === undefined && warp && c.beatSync && !ep.crossfade) ep.warp = warp;
+  if (c.beatSync && music && ep.end === undefined) ep.end = Math.min(c.duration, music.duration);
+  if (c.exportCover && ep.coverAt === undefined) {
+    const finish = await probeFinish(c, ep.warp ?? null);
+    const len = (ep.end ?? c.duration) - (ep.start ?? 0);
+    ep.coverAt = Math.max(0, Math.min(len - 0.05, coverTime(finish, c.duration) - (ep.start ?? 0)));
+  }
+  job = startExport(c, ep, (p) => {
     bar.max = p.total;
     bar.value = p.frame;
     const pct = Math.round((p.frame / p.total) * 100);
@@ -334,8 +423,11 @@ async function runExport(over: Partial<Config>, label: string, prefix: string): 
   });
   try {
     const r = await job.promise;
-    const name = `ball-${c.mode}-seed${c.seed}${label}.mp4`;
+    const base = `ball-${c.mode}-seed${c.seed}${label}`;
+    const name = `${base}.mp4`;
     download(r.blob, name);
+    if (c.exportCaption) download(new Blob([makeCaption(c, captionLang())], { type: 'text/plain' }), `${base}.txt`);
+    if (c.exportCover && r.cover) download(r.cover, `${base}.png`);
     const speed = r.duration / r.seconds;
     status.textContent = `${prefix}✅ ${name}: ${r.duration.toFixed(1)}s video trong ${r.seconds.toFixed(1)}s (×${speed.toFixed(1)} thời gian thực) · ${(r.blob.size / 1e6).toFixed(1)} MB · ${r.video}${r.audio ? ' + ' + r.audio : ''}`;
     return true;
@@ -347,7 +439,7 @@ async function runExport(over: Partial<Config>, label: string, prefix: string): 
   }
 }
 
-const EXPORT_BUTTONS = ['btn-export', 'btn-dual', 'btn-batch', 'btn-random-batch'];
+const EXPORT_BUTTONS = ['btn-export', 'btn-dual', 'btn-batch', 'btn-random-batch', 'btn-parts', 'btn-ab', 'btn-loop-export', 'btn-prompt'];
 
 async function exporting(fn: () => Promise<void>): Promise<void> {
   cancelled = false;
@@ -357,6 +449,7 @@ async function exporting(fn: () => Promise<void>): Promise<void> {
     await fn();
   } finally {
     for (const id of EXPORT_BUTTONS) $<HTMLButtonElement>(id).disabled = false;
+    $<HTMLButtonElement>('btn-loop-export').disabled = !loopFound;
     $<HTMLButtonElement>('btn-cancel').hidden = true;
   }
 }
@@ -480,9 +573,14 @@ function randomOptions(): { locks: RandomLocks; lang: HookLang; min: number; max
  */
 async function makeRandom(status: (text: string) => void): Promise<string> {
   const { locks, lang, min, max } = randomOptions();
-  let last = randomConfig(cfg, locks, lang);
+  return settle(() => randomConfig(cfg, locks, lang), min, max, status);
+}
+
+/** Tries generated configurations until one ends inside [min, max] seconds, then applies it. */
+async function settle(generate: () => RandomResult, min: number, max: number, status: (text: string) => void): Promise<string> {
+  let last = generate();
   for (let attempt = 1; attempt <= 6; attempt++) {
-    const res = attempt === 1 ? last : randomConfig(cfg, locks, lang);
+    const res = attempt === 1 ? last : generate();
     last = res;
     const next = res.cfg;
     if (!modeFinishes(next)) {
@@ -545,6 +643,207 @@ $('btn-random-batch').addEventListener('click', () =>
     }
   }),
 );
+
+// ---------------------------------------------------------------- viral tools
+
+function viralStatus(text: string): void {
+  $('viral-status').textContent = text;
+}
+
+// Describe the video in words.
+$('btn-prompt').addEventListener('click', async () => {
+  const text = $<HTMLTextAreaElement>('prompt-text').value.trim();
+  if (!text) {
+    toast('Hãy gõ mô tả video, ví dụ: "bóng lớn dần có gai, màu neon, piano, 30 giây"');
+    return;
+  }
+  const intent = parsePrompt(text);
+  $('prompt-tags').textContent = intent.tags.length ? `Hiểu: ${intent.tags.join(' · ')}` : 'Không nhận ra từ khóa nào — tạo ngẫu nhiên.';
+  const opts = randomOptions();
+  const lang = intent.lang ?? opts.lang;
+  const min = intent.minSeconds ?? opts.min;
+  const max = intent.maxSeconds ?? opts.max;
+  const generate = (): RandomResult => {
+    const base = cloneConfig(cfg);
+    if (intent.mode) {
+      base.mode = intent.mode;
+      Object.assign(base, MODE_DEFAULTS[intent.mode]);
+    }
+    const res = randomConfig(base, {
+      mode: !!intent.mode, look: !!intent.palette, audio: !!(intent.instrument || intent.melody), text: false,
+    }, lang);
+    const c = res.cfg;
+    if (intent.palette) {
+      const p = intent.palette;
+      Object.assign(c, { bgColor: p.bg, ringColor: p.ring, ballColor: p.ball, ringRainbow: p.ringRainbow, textColor: p.text, colorMode: p.colorMode });
+    }
+    if (intent.instrument) c.instrument = intent.instrument;
+    if (intent.melody) {
+      c.noteMode = 'melody';
+      c.melodyName = intent.melody;
+    }
+    Object.assign(c, intent.overrides);
+    if (intent.title) c.title = intent.title;
+    return res;
+  };
+  await userAction(async () => {
+    const st = $('random-status');
+    try {
+      const summary = await settle(generate, min, max, (t) => (st.textContent = t));
+      preview.setPlaying(true);
+      st.textContent = `✅ ${summary}`;
+    } catch (err) {
+      st.textContent = `❌ ${err instanceof Error ? err.message : String(err)}`;
+    }
+  });
+});
+
+// Most dramatic seed.
+let dramaJob: SearchJob | null = null;
+$('btn-drama').addEventListener('click', async () => {
+  dramaJob?.stop();
+  const min = Math.max(3, Number($<HTMLInputElement>('drama-min').value) || 15);
+  const max = Math.max(min + 1, Number($<HTMLInputElement>('drama-max').value) || 40);
+  const count = Math.max(10, Math.min(5000, Number($<HTMLInputElement>('drama-count').value) || 300));
+  const status = $('drama-status');
+  const list = $('drama-results');
+  const btn = $<HTMLButtonElement>('btn-drama');
+  btn.disabled = true;
+  const render = (results: SearchResult[]) => {
+    list.innerHTML = '';
+    for (const r of results.slice(0, 5)) {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'result';
+      b.dataset.seed = String(r.seed);
+      b.innerHTML = `<b>Seed ${r.seed}</b> · điểm ${r.score?.toFixed(1)} · ${r.finishTime.toFixed(1)}s <span class="hint">${(r.why ?? []).join(', ')}</span>`;
+      b.addEventListener('click', async () => {
+        cfg.duration = Math.min(600, Math.ceil(r.finishTime + cfg.endHold + 1));
+        panel.refresh();
+        await setSeed(r.seed);
+      });
+      li.append(b);
+      list.append(li);
+    }
+  };
+  const job = startSearch(cfg, { kind: 'drama', value: (min + max) / 2, min, max }, cfg.seed, count, (p) => {
+    status.textContent = `Đang chấm điểm ${p.done}/${p.total} seed · ${p.rate.toFixed(0)} seed/giây`;
+    render(p.results);
+  });
+  dramaJob = job;
+  try {
+    const results = await job.promise;
+    render(results);
+    status.textContent = results.length
+      ? `Xong. Top ${Math.min(5, results.length)} video kịch tính nhất — bấm để xem.`
+      : 'Không có seed nào kết thúc trong khoảng này.';
+  } catch (err) {
+    status.textContent = `Lỗi: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Seamless loops.
+let loopFound: { start: number; end: number; error: number } | null = null;
+$('btn-loop').addEventListener('click', async () => {
+  if (cfg.battle > 1) {
+    $('loop-status').textContent = 'Video lặp chưa hỗ trợ chế độ chia màn hình.';
+    return;
+  }
+  const min = Math.max(2, Number($<HTMLInputElement>('loop-min').value) || 6);
+  const max = Math.max(min + 1, Number($<HTMLInputElement>('loop-max').value) || 15);
+  const btn = $<HTMLButtonElement>('btn-loop');
+  btn.disabled = true;
+  $('loop-status').textContent = 'Đang tìm đoạn có khung đầu và cuối giống nhau nhất…';
+  try {
+    loopFound = await findLoopInWorker(cfg, min, max);
+    if (!loopFound) {
+      $('loop-status').textContent = 'Không tìm được đoạn lặp (số bóng thay đổi liên tục?). Thử chế độ ít bóng hoặc vòng kín.';
+    } else {
+      const q = loopFound.error < 8 ? 'rất mượt' : loopFound.error < 25 ? 'khá mượt' : 'hơi giật — thử seed khác';
+      $('loop-status').textContent =
+        `Đoạn ${loopFound.start.toFixed(2)}s → ${loopFound.end.toFixed(2)}s (dài ${(loopFound.end - loopFound.start).toFixed(1)}s) · lệch ${loopFound.error}px · ${q}`;
+      await userAction(async () => {
+        await preview.seek(loopFound!.start);
+        preview.setPlaying(true);
+      });
+    }
+  } catch (err) {
+    $('loop-status').textContent = `Lỗi: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    btn.disabled = false;
+    $<HTMLButtonElement>('btn-loop-export').disabled = !loopFound;
+  }
+});
+
+$('btn-loop-export').addEventListener('click', () =>
+  void exporting(async () => {
+    if (!loopFound) return;
+    await runExport(
+      { showCounter: false, showTimer: false, paintTrail: false, beatSync: false, stopOnFinish: false },
+      '-loop', '[Lặp] ',
+      { start: loopFound.start, end: loopFound.end, crossfade: 0.3, warp: [] },
+    );
+  }),
+);
+
+// Part 1 / Part 2.
+$('btn-parts').addEventListener('click', () =>
+  void exporting(async () => {
+    viralStatus('Đang tìm khoảnh khắc quyết định…');
+    const finish = await probeFinish(cfg, warp);
+    const plans = partPlans(finish, cfg.duration, cfg.endHold, captionLang(), warp);
+    viralStatus(`Cắt ở ${plans.cut.toFixed(1)}s${finish > 0 ? ` (trước đoạn kết ở ${finish.toFixed(1)}s)` : ''}`);
+    if (!(await runExport({}, '-part1', '[Phần 1] ', plans.part1))) return;
+    if (!cancelled) await runExport({}, '-part2', '[Phần 2] ', plans.part2);
+  }),
+);
+
+// A/B variants.
+$('btn-ab').addEventListener('click', () =>
+  void exporting(async () => {
+    const kind = $<HTMLSelectElement>('ab-kind').value as ABKind;
+    const count = Number($<HTMLSelectElement>('ab-count').value) || 2;
+    const variants = abVariants(cfg, kind, count, captionLang());
+    for (const v of variants) {
+      if (cancelled) break;
+      if (!(await runExport(v.cfg, `-${v.label}`, `[A/B ${v.label}] `))) break;
+    }
+  }),
+);
+
+// Caption and cover.
+$('btn-caption').addEventListener('click', async () => {
+  const text = makeCaption(cfg, captionLang());
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Đã sao chép caption + hashtag');
+  } catch {
+    $<HTMLTextAreaElement>('prompt-text').value = text;
+    toast('Không truy cập được clipboard — caption đã được đặt vào ô mô tả.');
+  }
+  viralStatus(text.replace(/\n+/g, ' · '));
+});
+
+$('btn-cover').addEventListener('click', async () => {
+  viralStatus('Đang dựng ảnh bìa độ phân giải gốc…');
+  const c = cloneConfig(cfg);
+  const scene = await Scene.create(c, c.renderer, (w, h) => new OffscreenCanvas(w, h), { composite: true });
+  const t = preview.time;
+  for (let v = 1 / 60; v <= t + 1e-9; v += 1 / 60) {
+    scene.advanceTo(warpTime(warp, v));
+    scene.drainEvents();
+    scene.paintOnly(c);
+  }
+  scene.advanceTo(warpTime(warp, t));
+  scene.render(c, t);
+  const blob = await (scene.output as OffscreenCanvas).convertToBlob({ type: 'image/png' });
+  scene.dispose();
+  download(blob, `ball-${c.mode}-seed${c.seed}-cover.png`);
+  viralStatus(`Đã tải ảnh bìa tại ${t.toFixed(1)}s`);
+});
 
 // ---------------------------------------------------------------- keyboard
 
@@ -648,14 +947,22 @@ async function showCodecSupport(): Promise<void> {
 async function boot(): Promise<void> {
   const saved = await idbGet<{ name: string; data: ArrayBuffer }>('sample');
   if (saved?.data) setUserSample(saved.name, saved.data);
+  const song = await idbGet<{ name: string; data: ArrayBuffer }>('music');
+  if (song?.data) {
+    try {
+      music = await analyzeMusic(song.data);
+      setMusic(song.name, song.data);
+    } catch {
+      // A stored file that no longer decodes is simply ignored.
+    }
+  }
   buildModeGrid();
   $<HTMLInputElement>('seed-input').value = String(cfg.seed);
   panel.refresh();
   updateUndoButtons();
   updateInfo();
-  updateSafeOverlay();
   void showCodecSupport();
-  await preview.restart();
+  await restartPreview();
   document.body.dataset.ready = 'true';
 }
 

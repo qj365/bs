@@ -79,10 +79,12 @@ export async function openGroupOf(page: Page, key: string): Promise<void> {
 }
 
 /** Small settings make exports quick in a GPU-less CI browser. */
-export async function quickExportSettings(page: Page, seconds = 2): Promise<void> {
+export async function quickExportSettings(page: Page, seconds = 2, extras = false): Promise<void> {
   await setSelect(page, 'resolution', '720x1280');
   await setSelect(page, 'fps', '30');
   await setNumber(page, 'duration', seconds);
+  await setCheckbox(page, 'exportCaption', extras);
+  await setCheckbox(page, 'exportCover', extras);
 }
 
 // ---------------------------------------------------------------- image checks

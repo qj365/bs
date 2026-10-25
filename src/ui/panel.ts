@@ -48,10 +48,16 @@ export class Panel {
     this.refresh();
   }
 
+  /** Updates only the info text next to action buttons (loaded files, counts…). */
+  refreshInfo(): void {
+    for (const r of this.rows) if (r.field.type === 'action') r.sync();
+  }
+
   /** Re-reads every value from the config and shows only the fields relevant to the current mode. */
   refresh(): void {
     for (const r of this.rows) {
-      r.sync();
+      // Never overwrite what the user is typing right now.
+      if (!r.row.contains(document.activeElement) || r.field.type === 'action') r.sync();
       const forMode = !r.field.modes || r.field.modes.includes(this.cfg.mode as Mode);
       const matches = !this.filter || r.field.label.toLowerCase().includes(this.filter);
       r.row.hidden = !forMode || !matches;

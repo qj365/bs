@@ -1,5 +1,7 @@
 import type { Config } from '../config';
-import { Simulation } from '../sim';
+import { Simulation, type SimEvent } from '../sim';
+import { dramaScore } from '../viral/drama';
+import { findLoop, sampleRun } from '../viral/loop';
 import { countNotes, type SearchIn, type SearchOut, type SearchResult } from './protocol';
 
 interface WorkerScope {
@@ -16,6 +18,10 @@ ctx.onmessage = (ev) => {
     return;
   }
   stopped = false;
+  if (msg.type === 'loop') {
+    loop(msg).catch((err) => ctx.postMessage({ type: 'error', message: err instanceof Error ? err.message : String(err) }));
+    return;
+  }
   run(msg).catch((err) => ctx.postMessage({ type: 'error', message: err instanceof Error ? err.message : String(err) }));
 };
 
@@ -26,7 +32,10 @@ ctx.onmessage = (ev) => {
  */
 async function run(msg: Extract<SearchIn, { type: 'start' }>): Promise<void> {
   const { cfg, target, seedFrom, count } = msg;
-  const maxT = target.kind === 'duration' ? target.value + Math.max(10, target.value * 0.5) : Math.min(cfg.duration * 3, 600);
+  const drama = target.kind === 'drama';
+  const maxT = drama
+    ? (target.max ?? cfg.duration) + 0.5
+    : target.kind === 'duration' ? target.value + Math.max(10, target.value * 0.5) : Math.min(cfg.duration * 3, 600);
   let sim: Simulation | null = null;
   const results: SearchResult[] = [];
   const t0 = performance.now();
@@ -37,19 +46,31 @@ async function run(msg: Extract<SearchIn, { type: 'start' }>): Promise<void> {
     if (sim) sim.reset(c);
     else sim = await Simulation.create(c);
     const notes = countNotes(c);
+    const all: SimEvent[] = [];
     let t = 0;
     let finished = false;
     while (t < maxT) {
       t += 0.25;
       sim.advanceTo(t);
-      notes.add(sim.drainEvents());
+      const ev = sim.drainEvents();
+      notes.add(ev);
+      if (drama) for (const e of ev) all.push(e);
       const st = sim.stats();
       if (st.finished) {
         finished = true;
         break;
       }
     }
-    if (finished) {
+    if (drama) {
+      const st = sim.stats();
+      const inWindow = finished ? st.finishTime >= (target.min ?? 0) : !finishes(c);
+      if (inWindow) {
+        const d = dramaScore(c, all, finished ? st.finishTime : -1, target.value);
+        results.push({ seed, finishTime: finished ? st.finishTime : maxT, notes: notes.count, error: -d.score, score: d.score, why: d.why });
+        results.sort((a, b) => a.error - b.error);
+        results.length = Math.min(results.length, 10);
+      }
+    } else if (finished) {
       const st = sim.stats();
       const value = target.kind === 'duration' ? st.finishTime : notes.count;
       results.push({ seed, finishTime: st.finishTime, notes: notes.count, error: Math.abs(value - target.value) });
@@ -63,4 +84,15 @@ async function run(msg: Extract<SearchIn, { type: 'start' }>): Promise<void> {
     }
   }
   ctx.postMessage({ type: 'done', results });
+}
+
+/** Modes that never end on their own are judged over the whole window. */
+function finishes(cfg: Config): boolean {
+  return !(cfg.mode === 'symmetric' || cfg.mode === 'merge' || (cfg.mode === 'trail' && cfg.growAmount <= 0));
+}
+
+async function loop(msg: Extract<SearchIn, { type: 'loop' }>): Promise<void> {
+  const { samples, sim } = await sampleRun(msg.cfg, msg.seconds);
+  const result = findLoop(msg.cfg, samples, msg.minLen, msg.maxLen, sim.cfg.ringRadius);
+  ctx.postMessage({ type: 'loop', result });
 }

@@ -41,6 +41,19 @@ Công cụ tự làm video "bóng nảy" kiểu satisfying/ASMR cho TikTok, Shor
 - **🎬 Tạo & xuất N video:** mỗi video một cấu hình ngẫu nhiên khác nhau, xuất lần lượt thành `…-random1.mp4`, `…-random2.mp4`, …
 - Bấm hoàn tác (↶) để quay lại video trước.
 
+**🚀 Công cụ viral:**
+- **🏆 Video kịch tính nhất:** chấm điểm hàng trăm seed theo độ hồi hộp và đưa ra top 5. Tiêu chí gồm số lần *suýt thoát* (nhất là ở cuối video), thoát ngay sau một lần suýt, nhịp nhanh dần, chung kết King of the Hill kéo dài và các biến cố.
+- **🎶 Khớp nhịp nhạc (beat-sync):** nạp MP3/WAV, công cụ tự dò BPM và vị trí từng nhịp, rồi co giãn thời gian chuyển động để mỗi cú nảy rơi đúng nhịp. Nhạc nền được trộn vào video.
+- **♾️ Video lặp liền mạch:** tìm đoạn mà khung cuối giống khung đầu nhất (so vị trí, vận tốc bóng, góc vòng, pha màu), xuất kèm 0,3 giây chuyển cảnh để video quay vòng không thấy chỗ nối.
+- **✂️ Phần 1 / Phần 2:** phần 1 dừng ngay trước khoảnh khắc quyết định kèm chữ "Xem phần 2 👀", phần 2 bắt đầu bằng 2 giây tua lại rồi đến đoạn kết.
+- **⚔️ Đấu đôi chia màn hình:** 2 hoặc 4 đấu trường cùng luật nhưng khác seed; đấu trường kết thúc trước thắng.
+- **⚡ Biến cố theo thời gian:** đảo trọng lực, nhân trọng lực, lỗ đen, gió, tăng tốc, thêm bóng, đảo chiều xoay, mở rộng khe. Có banner thông báo trên video.
+- **Cơ chế mới:** cổng dịch chuyển, nam châm ở tâm, gió.
+- **🅰🅱 Xuất A/B:** cùng một video, khác câu hook hoặc khác bảng màu, để đăng thử xem bản nào ăn khách hơn.
+- **📋 Caption + hashtag** (tiếng Việt hoặc tiếng Anh) và **🖼 ảnh bìa** được tự tải kèm mỗi video; cũng có thể sao chép caption hoặc tải ảnh bìa của khung hiện tại.
+- **✨ Tạo từ mô tả:** gõ ví dụ "bóng lớn dần có gai, màu neon, piano, 30 giây" hoặc "4 teams, sunset, black hole, english, 20-40s".
+- **🎧 ASMR:** âm thanh stereo theo vị trí bóng, thêm nhạc cụ thủy tinh, bi ve, gỗ, giọt nước.
+
 **Tìm seed tự động:** thử hàng trăm đến hàng nghìn seed trong nền để tìm video **kết thúc đúng số giây** bạn cần, hoặc **kết thúc đúng lúc bài nhạc chơi hết**. Bấm vào kết quả để xem ngay.
 
 **Xuất video:**
@@ -108,7 +121,10 @@ src/sim.ts    Lớp bọc WASM; đọc thẳng bộ đệm trong bộ nhớ WASM
 src/render/   GPU: WebGL2 instanced + SDF · CPU: Canvas 2D · lớp chữ (HUD) dùng chung
 src/audio/    Tổng hợp âm WebAudio, chọn nốt, nạp MIDI, dựng nhạc offline khi xuất
 src/export/   Web Worker: mô phỏng → vẽ → VideoEncoder → mp4-muxer
-src/search/   Web Worker tìm seed (chạy mô phỏng không vẽ hình)
+src/scene.ts  Ghép 1–4 đấu trường, chữ phủ, crossfade — dùng chung cho xem trước và xuất video
+src/sync.ts   Co giãn thời gian (time-warp) để cú nảy khớp nhịp nhạc
+src/search/   Web Worker tìm seed, chấm điểm kịch tính, tìm đoạn lặp (chạy mô phỏng không vẽ hình)
+src/viral/    Chấm điểm kịch tính, tìm đoạn lặp, chia Phần 1/2, A/B, caption, phân tích mô tả, beat-sync
 src/ui/       Bảng thiết lập sinh từ schema, xem trước + tua, trình soạn giai điệu
 tests/        unit/ (Vitest) · e2e/ (Playwright)
 ```

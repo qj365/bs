@@ -69,6 +69,11 @@ export const GROUPS: Group[] = [
         options: [['strings', 'Nối bóng tới các điểm chạm'], ['chain', 'Nối các điểm chạm với nhau']],
       },
       { key: 'explodeCount', label: 'Số bóng khi nổ', type: 'range', min: 10, max: 3000, step: 10, modes: ['collision'] },
+      { key: 'portals', label: 'Cổng dịch chuyển (vào cam, ra xanh)', type: 'checkbox', modes: RING_MODES },
+      { key: 'portalSize', label: 'Kích thước cổng', type: 'range', min: 12, max: 120, step: 1, modes: RING_MODES },
+      { key: 'magnet', label: 'Nam châm ở tâm (âm = đẩy ra)', type: 'range', min: -3000, max: 3000, step: 50 },
+      { key: 'wind', label: 'Gió liên tục (âm = sang trái)', type: 'range', min: -3000, max: 3000, step: 50 },
+      { key: 'action:chaos', label: '⚡ Biến cố theo thời gian…', type: 'action' },
     ],
   },
   {
@@ -146,7 +151,8 @@ export const GROUPS: Group[] = [
         options: [
           ['marimba', 'Marimba'], ['piano', 'Piano'], ['bell', 'Chuông'], ['musicbox', 'Hộp nhạc'], ['harp', 'Đàn hạc'],
           ['guitar', 'Guitar'], ['pluck', 'Gảy dây'], ['organ', 'Organ'], ['synth', 'Synth'], ['pop', 'Pop (bụp)'],
-          ['chip', '8-bit'], ['sample', '🎙 Âm thanh của bạn'],
+          ['chip', '8-bit'], ['glass', 'ASMR · thủy tinh'], ['marble', 'ASMR · bi ve'], ['wood', 'ASMR · gỗ'], ['drop', 'ASMR · giọt nước'],
+          ['sample', '🎙 Âm thanh của bạn'],
         ],
       },
       { key: 'action:sample', label: 'Nạp file âm thanh (wav/mp3/ogg) làm nhạc cụ', type: 'action', live: true },
@@ -171,6 +177,14 @@ export const GROUPS: Group[] = [
       { key: 'minNoteGap', label: 'Khoảng cách tối thiểu giữa 2 nốt (giây)', type: 'range', min: 0, max: 0.3, step: 0.005, live: true },
       { key: 'ballHitSound', label: 'Có tiếng khi bóng va nhau', type: 'checkbox', live: true },
       { key: 'sfx', label: 'Hiệu ứng (vỡ, nổ, vật phẩm, kết thúc)', type: 'checkbox', live: true },
+      { key: 'stereo', label: 'Âm thanh stereo theo vị trí bóng (đeo tai nghe)', type: 'checkbox', live: true },
+      { key: 'action:music', label: '🎶 Nạp nhạc nền (mp3/wav)', type: 'action', live: true },
+      { key: 'musicVolume', label: 'Âm lượng nhạc nền', type: 'range', min: 0, max: 1.5, step: 0.01, live: true },
+      { key: 'beatSync', label: 'Khớp cú nảy với nhịp nhạc nền (beat-sync)', type: 'checkbox' },
+      {
+        key: 'beatStride', label: 'Nảy theo', type: 'select', numeric: true,
+        options: [['0', 'Tự chọn'], ['1', 'Mỗi nhịp'], ['2', 'Mỗi 2 nhịp'], ['4', 'Mỗi 4 nhịp']],
+      },
     ],
   },
   {
@@ -178,6 +192,11 @@ export const GROUPS: Group[] = [
     title: '🎬 Video & hiệu năng',
     open: true,
     fields: [
+      {
+        key: 'battle', label: 'Đấu đôi chia màn hình', type: 'select', numeric: true,
+        options: [['1', 'Tắt (1 đấu trường)'], ['2', '2 đấu trường đua nhau'], ['4', '4 đấu trường (2×2)']],
+        hint: 'Cùng luật, khác seed — đấu trường nào kết thúc trước thì thắng',
+      },
       {
         key: 'resolution', label: 'Khung hình', type: 'select',
         options: [['1080x1920', '1080×1920 dọc (TikTok/Shorts/Reels)'], ['720x1280', '720×1280 dọc'], ['1440x2560', '1440×2560 dọc (2K)'], ['2160x3840', '2160×3840 dọc (4K)'], ['1080x1080', '1080×1080 vuông'], ['1920x1080', '1920×1080 ngang (YouTube)']],
@@ -193,6 +212,8 @@ export const GROUPS: Group[] = [
       { key: 'bitrate', label: 'Bitrate (Mbps)', type: 'range', min: 2, max: 80, step: 1, live: true },
       { key: 'stopOnFinish', label: 'Tự dừng khi kết thúc màn', type: 'checkbox', live: true },
       { key: 'endHold', label: 'Giữ thêm sau khi kết thúc (giây)', type: 'range', min: 0, max: 10, step: 0.5, live: true },
+      { key: 'exportCaption', label: 'Kèm file caption + hashtag (.txt) khi xuất', type: 'checkbox', live: true },
+      { key: 'exportCover', label: 'Kèm ảnh bìa (.png) khi xuất', type: 'checkbox', live: true },
       {
         key: 'renderer', label: 'Vẽ hình bằng', type: 'select',
         options: [['auto', 'Tự động (GPU, lỗi thì CPU)'], ['gpu', 'GPU — WebGL2 (nhanh)'], ['cpu', 'CPU — Canvas 2D (tương thích)']],

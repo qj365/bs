@@ -82,6 +82,58 @@
             </div>
             <div id="random-status" class="status"></div>
           </div>
+          <div class="card viral-card">
+            <h3>🚀 Công cụ viral</h3>
+            <div class="tool">
+              <div class="tool-title">✨ Tạo từ mô tả</div>
+              <textarea id="prompt-text" rows="2" aria-label="Mô tả video" placeholder='VD: "bóng lớn dần có gai, màu neon, piano, 30 giây" · "4 teams, sunset, black hole, english, 20-40s"'></textarea>
+              <div class="search-row">
+                <button id="btn-prompt" type="button" class="primary">✨ Tạo video</button>
+                <span id="prompt-tags" class="hint"></span>
+              </div>
+            </div>
+            <div class="tool">
+              <div class="tool-title">🏆 Video kịch tính nhất</div>
+              <div class="search-row">
+                <label class="inline">Kết thúc trong <input id="drama-min" type="number" min="3" value="15" aria-label="Tối thiểu" /> –
+                  <input id="drama-max" type="number" min="4" value="40" aria-label="Tối đa" /> giây</label>
+                <label class="inline">thử <input id="drama-count" type="number" min="10" max="5000" value="300" aria-label="Số seed" /> seed</label>
+                <button id="btn-drama" type="button">Chấm điểm</button>
+              </div>
+              <div id="drama-status" class="status"></div>
+              <ol id="drama-results" class="results"></ol>
+            </div>
+            <div class="tool">
+              <div class="tool-title">♾️ Video lặp liền mạch</div>
+              <div class="search-row">
+                <label class="inline">Dài <input id="loop-min" type="number" min="2" value="6" aria-label="Tối thiểu" /> –
+                  <input id="loop-max" type="number" min="3" value="15" aria-label="Tối đa" /> giây</label>
+                <button id="btn-loop" type="button">Tìm đoạn lặp</button>
+                <button id="btn-loop-export" type="button" disabled>Xuất video lặp</button>
+              </div>
+              <div id="loop-status" class="status"></div>
+            </div>
+            <div class="tool">
+              <div class="tool-title">✂️ Phần 1/2 · 🅰🅱 A/B · 📋 Caption · 🖼 Ảnh bìa</div>
+              <div class="search-row">
+                <button id="btn-parts" type="button" title="Phần 1 dừng ngay trước đoạn kết kèm chữ 'Xem phần 2', phần 2 là đoạn kết">✂️ Xuất Phần 1 + Phần 2</button>
+              </div>
+              <div class="search-row">
+                <select id="ab-kind" aria-label="Kiểu A/B">
+                  <option value="hook">A/B câu hook</option>
+                  <option value="palette">A/B màu sắc</option>
+                  <option value="both">A/B cả hai</option>
+                </select>
+                <select id="ab-count" aria-label="Số bản"><option value="2">2 bản</option><option value="3" selected>3 bản</option></select>
+                <button id="btn-ab" type="button">🅰🅱 Xuất A/B</button>
+              </div>
+              <div class="search-row">
+                <button id="btn-caption" type="button">📋 Sao chép caption</button>
+                <button id="btn-cover" type="button">🖼 Ảnh bìa (khung hiện tại)</button>
+              </div>
+              <div id="viral-status" class="status"></div>
+            </div>
+          </div>
           <div class="card">
             <h3>⬇ Xuất video</h3>
             <div class="export-row">
