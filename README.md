@@ -74,6 +74,22 @@ Công cụ tự làm video "bóng nảy" kiểu satisfying/ASMR cho TikTok, Shor
 - Khung vùng an toàn khi xem trước.
 - Tự lưu cấu hình; lưu và mở preset JSON.
 
+## Bi rơi 3D (tab "🎵 Bi rơi 3D")
+
+Trang riêng `marble.html`, chuyển qua lại với Ball Studio 2D bằng tab trên đầu trang. Kiểu video: một viên bi thép rơi xuống, gõ vào các phím gỗ và phím trắng để chơi một bài nhạc.
+
+- **Thiết kế ngược từ bài nhạc:** mỗi nốt là một lần bi chạm phím đúng thời điểm, nên video luôn khớp nhạc và không cần tìm seed. Giữa hai lần chạm, bi bay theo parabol tính sẵn. Phím được nghiêng sao cho bi bật đúng tới phím kế tiếp.
+- Nốt nhanh hơn mức đặt (mặc định 0,14 giây, từ 3 nốt trở lên) → **dãy phím lăn trên ray**. Các dãy nối nhau thành cầu thang xoắn vuông quanh trục rơi.
+- Khoảng nghỉ dài → **máng cong**, bi lăn qua máng rồi bay tiếp.
+- Nốt trầm dùng **phím gỗ**, nốt cao dùng **phím trắng**. Ngưỡng cao độ chỉnh được. Phím trầm dài hơn phím cao, giống đàn xylophone thật.
+- Phím rung và lóe sáng khi bị gõ. Có bóng đổ, đèn rọi theo bi, sương mờ ở đáy, camera nhìn từ trên xuống bám theo bi.
+- Âm thanh: phím gỗ và phím trắng dùng 2 nhạc cụ riêng (mặc định marimba và hộp nhạc), âm stereo theo vị trí phím, có tiếng bi lăn trên ray/máng.
+- Nguồn nhạc: 6 bài có sẵn (chỉnh BPM, số lần lặp, dịch giọng) hoặc **file MIDI** (giữ nguyên nhịp gốc, hợp âm gõ cùng lúc).
+- Chữ: tiêu đề ở trên, chữ phụ ở dưới.
+- Tua tức thì đến bất kỳ thời điểm nào, vì vị trí bi tính trực tiếp từ thời gian.
+- Có seed bố cục (cùng bài nhạc, khác đường chạy), lưu và mở preset.
+- **Xuất MP4:** cả bài hoặc một đoạn (từ … đến … giây). Three.js vẽ trên OffscreenCanvas trong worker, mã hóa bằng WebCodecs, ưu tiên GPU.
+
 ## GPU hay CPU?
 
 Công cụ tách riêng 3 phần việc, mỗi phần chọn cách chạy hợp nhất:
@@ -114,6 +130,8 @@ npm run test:e2e    # E2E test bằng Playwright (tự build và chạy server)
   - Trình soạn giai điệu, nạp MIDI, nạp âm thanh riêng.
   - Xuất MP4 (kiểm tra cấu trúc file, track hình và track tiếng); xuất bằng CPU; xuất 2 bản; hủy khi đang xuất.
   - Tìm seed; renderer CPU.
+  - Bi rơi 3D: chuyển tab, vẽ cảnh 3D, tua, phát, đổi bài/BPM/seed, nạp MIDI (sinh dãy phím lăn và máng cong), xuất MP4 có tiếng.
+- **Unit test bi rơi 3D:** mỗi nốt có đúng một phím, bi chạm phím đúng thời điểm, quỹ đạo liền mạch, bi bật ra đúng phía mặt phím, cùng seed thì cùng đường chạy.
 
 CI (`.github/workflows/ci.yml`) hiện chỉ chạy khi bấm tay ở tab Actions ("Run workflow"). Muốn chạy ở mỗi lần push, thêm lại `push:` và `pull_request:` vào mục `on:`.
 
@@ -130,6 +148,8 @@ src/sync.ts   Co giãn thời gian (time-warp) để cú nảy khớp nhịp nh�
 src/search/   Web Worker tìm seed, chấm điểm kịch tính, tìm đoạn lặp (chạy mô phỏng không vẽ hình)
 src/viral/    Chấm điểm kịch tính, tìm đoạn lặp, chia Phần 1/2, A/B, caption, phân tích mô tả, beat-sync
 src/ui/       Bảng thiết lập sinh từ schema, xem trước + tua, trình soạn giai điệu
+src/marble/   Bi rơi 3D: choreo.ts (dựng đường chạy từ nốt), scene3d.ts (Three.js), audio.ts, worker xuất MP4
+marble.html   Trang/tab Bi rơi 3D
 tests/        unit/ (Vitest) · e2e/ (Playwright)
 ```
 

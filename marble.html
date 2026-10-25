@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ball Studio · Bi rơi 3D</title>
+  </head>
+  <body>
+    <header>
+      <h1>Ball Studio</h1>
+      <nav class="tabs" aria-label="Chế độ">
+        <a href="./index.html" class="tab" id="tab-2d">⚪ Bóng nảy 2D</a>
+        <a href="./marble.html" class="tab active" aria-current="page">🎵 Bi rơi 3D</a>
+      </nav>
+      <div class="header-actions">
+        <button id="btn-save" type="button">💾 Lưu preset</button>
+        <label class="file-btn">📂 Mở preset<input id="file-preset" type="file" accept=".json,application/json" hidden /></label>
+        <button id="btn-reset" type="button">↺ Mặc định</button>
+      </div>
+      <span id="codec-status" class="codec">Đang kiểm tra bộ mã hóa…</span>
+    </header>
+    <main>
+      <aside id="sidebar">
+        <p class="hint">Đường chạy được <b>thiết kế ngược từ bài nhạc</b>: mỗi nốt là một lần bi chạm phím đúng thời điểm, nên video luôn khớp nhạc — không cần tìm seed.</p>
+        <input id="settings-filter" class="filter" type="search" placeholder="🔎 Tìm thiết lập…" />
+        <div id="panel"></div>
+      </aside>
+      <section class="stage">
+        <div class="canvas-wrap">
+          <div id="canvas-box" class="canvas-box">
+            <canvas id="view" width="540" height="960"></canvas>
+            <canvas id="text-layer" class="text-layer" width="540" height="960"></canvas>
+          </div>
+        </div>
+        <div class="timeline">
+          <button id="btn-play" type="button" title="Phát / tạm dừng (Space)">▶</button>
+          <button id="btn-restart" type="button" title="Phát lại từ đầu (R)">⟲</button>
+          <input id="scrub" type="range" min="0" max="30" step="0.0166667" value="0" aria-label="Tua thời gian" />
+          <span id="time-label" class="time">0:00.0</span>
+        </div>
+        <div class="toolbar">
+          <span class="seed">
+            Seed đường chạy
+            <button id="seed-prev" type="button" title="Seed trước">◀</button>
+            <input id="seed-input" type="number" min="0" step="1" aria-label="Seed" />
+            <button id="seed-next" type="button" title="Seed sau">▶</button>
+            <button id="btn-seed" type="button" title="Seed ngẫu nhiên">🎲</button>
+          </span>
+          <span id="stats" class="stats"></span>
+        </div>
+        <p id="audio-hint" class="hint">🔈 Bấm ▶ để phát kèm tiếng (trình duyệt chặn tự phát tiếng).</p>
+        <div class="cards">
+          <div class="card">
+            <h3>⬇ Xuất video 3D</h3>
+            <div class="export-row">
+              <button id="btn-export" type="button" class="primary">Xuất MP4</button>
+              <label class="inline">Từ <input id="clip-from" type="number" min="0" step="0.5" value="0" aria-label="Bắt đầu (giây)" /></label>
+              <label class="inline">đến <input id="clip-to" type="number" min="0" step="0.5" value="0" aria-label="Kết thúc (giây, 0 = hết bài)" /> giây</label>
+              <button id="btn-cancel" type="button" hidden>✕ Hủy</button>
+            </div>
+            <div class="hint">Để "đến" = 0 để xuất cả bài. Video dựng bằng Three.js trong worker, mã hóa phần cứng qua WebCodecs.</div>
+            <progress id="export-bar" value="0" max="1"></progress>
+            <div id="export-status" class="status"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script type="module" src="/src/marble/main.ts"></script>
+  </body>
+</html>

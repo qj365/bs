@@ -315,7 +315,7 @@ class NotePicker {
 }
 
 /** Builds master volume → compressor (+ optional reverb) and returns the input node. */
-export function buildMaster(ctx: BaseAudioContext, cfg: Config): AudioNode {
+export function buildMaster(ctx: BaseAudioContext, cfg: Pick<Config, 'volume' | 'reverb'>): AudioNode {
   const input = ctx.createGain();
   input.gain.value = cfg.volume;
   const comp = ctx.createDynamicsCompressor();

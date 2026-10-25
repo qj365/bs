@@ -1,28 +1,28 @@
-import type { Config, Mode } from '../config';
-import { GROUPS, type Field } from './schema';
+import type { Config } from '../config';
+import { GROUPS, type Field, type Group } from './schema';
 
-export interface PanelHandlers {
-  onChange(key: keyof Config, live: boolean): void;
+export interface PanelHandlers<C = Config> {
+  onChange(key: keyof C, live: boolean): void;
   onAction(name: string): void;
   /** Extra text shown next to an action button (e.g. the loaded file name). */
   actionInfo(name: string): string;
 }
 
-interface Row {
-  field: Field;
+interface Row<C> {
+  field: Field<C>;
   row: HTMLElement;
   group: HTMLDetailsElement;
   sync: () => void;
 }
 
 /** Builds the settings panel from the schema and keeps inputs in sync with the config object. */
-export class Panel {
-  private rows: Row[] = [];
+export class Panel<C extends object = Config> {
+  private rows: Row<C>[] = [];
   private groups: HTMLDetailsElement[] = [];
   private filter = '';
 
-  constructor(root: HTMLElement, private cfg: Config, private h: PanelHandlers) {
-    for (const group of GROUPS) {
+  constructor(root: HTMLElement, private cfg: C, private h: PanelHandlers<C>, groups: Group<C>[] = GROUPS as unknown as Group<C>[]) {
+    for (const group of groups) {
       const details = document.createElement('details');
       details.className = 'group';
       details.dataset.group = group.id;
@@ -37,7 +37,7 @@ export class Panel {
     this.refresh();
   }
 
-  setConfig(cfg: Config): void {
+  setConfig(cfg: C): void {
     this.cfg = cfg;
     this.refresh();
   }
@@ -58,7 +58,7 @@ export class Panel {
     for (const r of this.rows) {
       // Never overwrite what the user is typing right now.
       if (!r.row.contains(document.activeElement) || r.field.type === 'action') r.sync();
-      const forMode = !r.field.modes || r.field.modes.includes(this.cfg.mode as Mode);
+      const forMode = !r.field.modes || r.field.modes.includes(String((this.cfg as { mode?: unknown }).mode));
       const matches = !this.filter || r.field.label.toLowerCase().includes(this.filter);
       r.row.hidden = !forMode || !matches;
     }
@@ -69,7 +69,7 @@ export class Panel {
     }
   }
 
-  private buildRow(field: Field, group: HTMLDetailsElement): HTMLElement {
+  private buildRow(field: Field<C>, group: HTMLDetailsElement): HTMLElement {
     const row = document.createElement('label');
     row.className = `row row-${field.type}`;
     row.dataset.key = field.key;
@@ -81,7 +81,7 @@ export class Panel {
       title.classList.add('has-hint');
     }
     const cfg = () => this.cfg as unknown as Record<string, unknown>;
-    const key = field.key as keyof Config;
+    const key = field.key as keyof C & string;
     const commit = (value: unknown) => {
       cfg()[key] = value;
       this.h.onChange(key, !!field.live);

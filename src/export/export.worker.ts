@@ -3,6 +3,7 @@ import { parseResolution, type Config } from '../config';
 import { Scene } from '../scene';
 import type { SimEvent } from '../sim';
 import { unwarpTime, warpTime } from '../sync';
+import { encodeAudio } from './audio-encode';
 import { pickAudioCodec, pickVideoCodec } from './codecs';
 import type { ExportPlan, WorkerIn, WorkerOut } from './protocol';
 
@@ -131,7 +132,7 @@ async function run(cfg: Config, plan: ExportPlan): Promise<void> {
     const reply = await new Promise<WorkerIn>((r) => (audioResolve = r));
     if (reply.type === 'audio') {
       post({ type: 'status', text: 'Đang mã hóa âm thanh…' });
-      await encodeAudio(audio.config, reply.left, reply.right, (chunk, meta) => muxer.addAudioChunk(chunk, meta));
+      await encodeAudio(audio.config, SAMPLE_RATE, reply.left, reply.right, (chunk, meta) => muxer.addAudioChunk(chunk, meta));
     }
   }
 
@@ -205,37 +206,4 @@ function captureWith(mode: CaptureMode, scene: Scene, timestamp: number, duratio
   }
   const img = (canvas.getContext('2d') as OffscreenCanvasRenderingContext2D).getImageData(0, 0, width, height);
   return new VideoFrame(img.data, { format: 'RGBX', codedWidth: width, codedHeight: height, timestamp, duration });
-}
-
-async function encodeAudio(
-  config: AudioEncoderConfig,
-  left: Float32Array,
-  right: Float32Array,
-  onChunk: (c: EncodedAudioChunk, m?: EncodedAudioChunkMetadata) => void,
-): Promise<void> {
-  let error: unknown = null;
-  const enc = new AudioEncoder({ output: onChunk, error: (e) => (error = e) });
-  enc.configure(config);
-  const block = 4800; // 100 ms per AudioData
-  for (let off = 0; off < left.length; off += block) {
-    const n = Math.min(block, left.length - off);
-    const planar = new Float32Array(n * 2);
-    planar.set(left.subarray(off, off + n), 0);
-    planar.set(right.subarray(off, off + n), n);
-    const data = new AudioData({
-      format: 'f32-planar',
-      sampleRate: SAMPLE_RATE,
-      numberOfFrames: n,
-      numberOfChannels: 2,
-      timestamp: Math.round((off / SAMPLE_RATE) * 1_000_000),
-      data: planar,
-    });
-    enc.encode(data);
-    data.close();
-    while (enc.encodeQueueSize > 20) await new Promise((r) => setTimeout(r, 1));
-    if (error) throw error;
-  }
-  await enc.flush();
-  enc.close();
-  if (error) throw error;
 }

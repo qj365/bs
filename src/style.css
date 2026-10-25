@@ -33,6 +33,10 @@ header {
 h1 { font-size: 18px; margin: 0; letter-spacing: 0.3px; }
 h1::before { content: '●'; color: var(--accent); margin-right: 8px; }
 h3 { margin: 0 0 8px; font-size: 15px; }
+.tabs { display: flex; gap: 4px; background: var(--bg); padding: 3px; border-radius: 8px; border: 1px solid var(--border); }
+.tab { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 6px; font-weight: 600; font-size: 13px; }
+.tab:hover { color: var(--text); }
+.tab.active { background: var(--accent); color: #fff; }
 .header-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .codec { margin-left: auto; color: var(--muted); font-size: 12px; }
 .codec.bad { color: var(--bad); }
@@ -228,6 +232,7 @@ kbd { background: var(--panel-3); border: 1px solid var(--border); border-radius
   z-index: 10;
 }
 .toast[hidden] { display: none; }
+.canvas-box .text-layer { position: absolute; inset: 0; pointer-events: none; box-shadow: none; background: transparent; }
 @media (max-width: 900px) {
   main { flex-direction: column-reverse; }
   aside { width: 100%; border-right: 0; border-top: 1px solid var(--border); }

@@ -4,8 +4,8 @@ import { MELODIES } from '../audio/melodies';
 
 export type FieldType = 'range' | 'number' | 'select' | 'checkbox' | 'color' | 'text' | 'textarea' | 'action';
 
-export interface Field {
-  key: keyof Config | `action:${string}`;
+export interface Field<C = Config> {
+  key: (keyof C & string) | `action:${string}`;
   label: string;
   type: FieldType;
   min?: number;
@@ -13,7 +13,7 @@ export interface Field {
   step?: number;
   options?: [string, string][];
   /** Only shown for these modes. */
-  modes?: Mode[];
+  modes?: readonly string[];
   /** Visual/audio/output setting: changing it does not restart the simulation. */
   live?: boolean;
   hint?: string;
@@ -21,11 +21,11 @@ export interface Field {
   numeric?: boolean;
 }
 
-export interface Group {
+export interface Group<C = Config> {
   id: string;
   title: string;
   open?: boolean;
-  fields: Field[];
+  fields: Field<C>[];
 }
 
 const ALL = Object.keys(MODE_INFO) as Mode[];
