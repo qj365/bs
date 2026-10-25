@@ -62,6 +62,9 @@ const INSTRUMENT_WORDS: [Instrument, string[]][] = [
   ['marble', ['bi ve', 'marble', 'vien bi']],
   ['wood', ['tieng go', 'wood', 'mo go']],
   ['drop', ['giot nuoc', 'water drop', 'nuoc']],
+  ['gong', ['cong chieng', 'gong']],
+  ['drum', ['tieng trong', 'drum']],
+  ['boing', ['lo xo', 'boing', 'spring']],
   ['marimba', ['marimba']],
 ];
 

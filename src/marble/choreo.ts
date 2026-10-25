@@ -94,6 +94,8 @@ export interface Hit {
   kind: BarKind;
   /** Horizontal position, -1 (left) … 1 (right), for stereo. */
   pan: number;
+  /** Struck while rolling along a row. */
+  row: boolean;
 }
 
 export type Segment =
@@ -288,7 +290,7 @@ export function buildCourse(input: MarbleNote[], options: Partial<CourseOptions>
         kind: kindOf(first.midi), hitTime: first.t, notes: first.midi, inRow: false,
       };
       course.bars.push(bar);
-      course.hits.push({ t: first.t, notes: first.midi, kind: bar.kind, pan: panOf(pos[0]) });
+      course.hits.push({ t: first.t, notes: first.midi, kind: bar.kind, pan: panOf(pos[0]), row: false });
       pendingBar = { bar, vIn };
       continue;
     }
@@ -324,7 +326,7 @@ export function buildCourse(input: MarbleNote[], options: Partial<CourseOptions>
       };
       if (bar.normal[1] < 0) bar.normal = mul(bar.normal, -1);
       course.bars.push(bar);
-      course.hits.push({ t: n.t, notes: n.midi, kind: bar.kind, pan: panOf(p[0]) });
+      course.hits.push({ t: n.t, notes: n.midi, kind: bar.kind, pan: panOf(p[0]), row: true });
     }
     const end = add(landing, mul(v, runTime));
     const below: Vec3 = [0, -(o.ballRadius + 0.06), 0];

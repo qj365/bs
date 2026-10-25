@@ -2,7 +2,7 @@ import type { Instrument } from '../config';
 import { MELODIES } from '../audio/melodies';
 import { Rng } from '../rng';
 import type { CourseLayout } from './choreo';
-import { applyTheme, MARBLE_THEMES, type CameraMode, type MarbleConfig } from './config';
+import { applyTheme, MARBLE_THEMES, type BallShape, type CameraMode, type MarbleConfig, type Striker } from './config';
 
 export interface MarbleLocks {
   /** Keep the song, tempo and repeats. */
@@ -37,6 +37,8 @@ const INSTRUMENT_PAIRS: [Instrument, Instrument][] = [
 
 const LAYOUTS: CourseLayout[] = ['zigzag', 'zigzag', 'spiral', 'scatter', 'stairs'];
 const CAMERAS: CameraMode[] = ['side', 'side', 'top', 'orbit', 'close'];
+const STRIKERS: Striker[] = ['bar', 'bar', 'bar', 'mixed', 'mixed', 'bell', 'drum', 'glass', 'tube', 'gong', 'pad'];
+const SHAPES: BallShape[] = ['sphere', 'sphere', 'sphere', 'cube', 'dice', 'gem', 'diamond', 'capsule', 'egg', 'star'];
 
 const pick = <T>(rng: Rng, list: readonly T[]): T => list[Math.floor(rng.next() * list.length)];
 
@@ -62,6 +64,8 @@ export function randomMarble(base: MarbleConfig, rng: Rng, locks: MarbleLocks, l
   if (!locks.look) {
     applyTheme(c, pick(rng, MARBLE_THEMES).id);
     c.cameraMode = pick(rng, CAMERAS);
+    c.striker = pick(rng, STRIKERS);
+    c.ballShape = pick(rng, SHAPES);
     c.cameraAngle = rng.int(-40, 40);
     c.cameraElevation = rng.int(5, 25);
     c.cameraDistance = +rng.range(2.8, 4.2).toFixed(1);

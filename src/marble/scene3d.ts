@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { drawTitle } from '../render/hud';
 import { ballAt, cameraTarget, type Bar, type Course, type Vec3 } from './choreo';
-import type { MarbleConfig } from './config';
+import { strikerFor, type MarbleConfig, type StrikerKind } from './config';
 
 type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
 type Canvas2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -38,7 +38,9 @@ export class MarbleScene {
   private ball: THREE.Group;
   private course: Course | null = null;
   private dynamic = new THREE.Group();
-  private bars: THREE.InstancedMesh | null = null;
+  /** One instanced mesh per kind of struck object; `idx` maps instances to course bars. */
+  private groups: { kind: StrikerKind; mesh: THREE.InstancedMesh; extra: THREE.InstancedMesh | null; idx: number[] }[] = [];
+  private kinds: StrikerKind[] = [];
   private barList: Bar[] = [];
   private base: THREE.Matrix4[] = [];
   private active = new Set<number>();
@@ -107,44 +109,80 @@ export class MarbleScene {
       disposeDeep(obj);
     }
     this.active.clear();
-    this.bars = null;
+    this.groups = [];
     this.barList = course.bars;
-    this.base = [];
+    this.kinds = course.bars.map((b) => strikerFor(cfg, b.notes, b.inRow));
+    this.base = course.bars.map((b, i) => objectMatrix(this.kinds[i], b, 0));
 
-    const box = new THREE.BoxGeometry(1, 1, 1);
-    if (course.bars.length > 0) {
-      const mesh = new THREE.InstancedMesh(box, new THREE.MeshBasicMaterial(), course.bars.length);
+    for (const kind of ['bar', 'bell', 'drum', 'glass', 'tube', 'gong', 'pad'] as StrikerKind[]) {
+      const idx = this.kinds.flatMap((k, i) => (k === kind ? [i] : []));
+      if (idx.length === 0) continue;
+      const mesh = new THREE.InstancedMesh(objectGeometry(kind), new THREE.MeshBasicMaterial(), idx.length);
       mesh.castShadow = mesh.receiveShadow = true;
-      course.bars.forEach((b, i) => {
-        const m = barMatrix(b, 0);
-        this.base.push(m);
-        mesh.setMatrixAt(i, m);
-        mesh.setColorAt(i, new THREE.Color(cfg.barColor));
+      idx.forEach((i, j) => {
+        mesh.setMatrixAt(j, this.base[i]);
+        mesh.setColorAt(j, new THREE.Color(cfg.barColor));
       });
-      this.bars = mesh;
+      // Drum skins and pad rims are separate, untinted parts that move with the object.
+      let extra: THREE.InstancedMesh | null = null;
+      if (kind === 'drum' || kind === 'pad') {
+        const geo = kind === 'drum'
+          ? new THREE.CircleGeometry(0.49, 28).rotateX(-Math.PI / 2).translate(0, 0.002, 0)
+          : new THREE.TorusGeometry(0.5, 0.07, 8, 28).rotateX(Math.PI / 2).translate(0, -0.5, 0);
+        const mat = kind === 'drum'
+          ? new THREE.MeshStandardMaterial({ color: 0xf2ece0, roughness: 0.85 })
+          : new THREE.MeshStandardMaterial({ color: cfg.holderColor, roughness: 0.5, metalness: 0.3 });
+        extra = new THREE.InstancedMesh(geo, mat, idx.length);
+        extra.castShadow = true;
+        idx.forEach((i, j) => extra!.setMatrixAt(j, this.base[i]));
+        this.dynamic.add(extra);
+      }
+      this.groups.push({ kind, mesh, extra, idx });
       this.dynamic.add(mesh);
     }
 
-    // Black wire brackets (a ㄷ shape behind each free bar, with a knob on top).
-    const free = course.bars.filter((b) => !b.inRow);
+    // Holders: black ㄷ wire brackets behind free bars; hanging rods for bells and tubes;
+    // a stand rod behind drums, gongs, pads and glasses.
     const wire = new THREE.MeshStandardMaterial({ color: cfg.holderColor, roughness: 0.45, metalness: 0.6, envMap: this.envTex });
-    if (free.length > 0) {
-      const rods = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 6), wire, free.length * 3);
-      const knobs = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 8, 6), wire, free.length);
+    const rodsList: [THREE.Vector3, THREE.Vector3][] = [];
+    const knobList: THREE.Vector3[] = [];
+    course.bars.forEach((b, i) => {
+      if (b.inRow) return;
+      const n = v3(b.normal), a = v3(b.axis);
+      const surf = v3(b.center).addScaledVector(n, THICK / 2);
+      const { depth, half } = objectExtent(this.kinds[i], b);
+      switch (this.kinds[i]) {
+        case 'bar': {
+          const back = surf.clone().addScaledVector(n, -THICK);
+          const ends = [-1, 1].map((sg) => back.clone().addScaledVector(a, sg * b.length * 0.3));
+          const far = ends.map((p) => p.clone().addScaledVector(n, -0.16));
+          rodsList.push([ends[0], far[0]], [ends[1], far[1]], [far[0], far[1]]);
+          knobList.push(far[0].y > far[1].y ? far[0] : far[1]);
+          break;
+        }
+        case 'bell':
+        case 'tube': {
+          const top = surf.clone().addScaledVector(n, -depth / 2).addScaledVector(a, half);
+          const hook = top.clone().addScaledVector(a, 0.16);
+          rodsList.push([top, hook]);
+          knobList.push(hook);
+          break;
+        }
+        default: {
+          const back = surf.clone().addScaledVector(n, -depth);
+          const end = back.clone().addScaledVector(n, -0.17);
+          rodsList.push([back, end]);
+          knobList.push(end);
+        }
+      }
+    });
+    if (rodsList.length > 0) {
+      const rods = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 6), wire, rodsList.length);
+      const knobs = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 8, 6), wire, knobList.length);
       rods.castShadow = knobs.castShadow = true;
       const m = new THREE.Matrix4();
-      free.forEach((b, i) => {
-        const n = v3(b.normal), a = v3(b.axis), c = v3(b.center);
-        const back = c.clone().addScaledVector(n, -THICK / 2);
-        const depth = 0.16;
-        const ends = [-1, 1].map((s) => back.clone().addScaledVector(a, s * b.length * 0.3));
-        const far = ends.map((p) => p.clone().addScaledVector(n, -depth));
-        rods.setMatrixAt(i * 3, rodMatrix(ends[0], far[0], 0.011, m).clone());
-        rods.setMatrixAt(i * 3 + 1, rodMatrix(ends[1], far[1], 0.011, m).clone());
-        rods.setMatrixAt(i * 3 + 2, rodMatrix(far[0], far[1], 0.011, m).clone());
-        const top = far[0].y > far[1].y ? far[0] : far[1];
-        knobs.setMatrixAt(i, m.makeScale(0.025, 0.025, 0.025).setPosition(top));
-      });
+      rodsList.forEach(([from, to], k) => rods.setMatrixAt(k, rodMatrix(from, to, 0.011, m)));
+      knobList.forEach((p, k) => knobs.setMatrixAt(k, m.makeScale(0.025, 0.025, 0.025).setPosition(p)));
       this.dynamic.add(rods, knobs);
     }
 
@@ -207,6 +245,19 @@ export class MarbleScene {
     return [edge, edge, face, face, edge, edge];
   }
 
+  /** Material for bells, drums, glasses, tubes, gongs and pads (tinted per instance). */
+  private objectMaterial(kind: StrikerKind, cfg: MarbleConfig): THREE.Material {
+    if (cfg.barStyle === 'neon') return new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.DoubleSide });
+    const env = { envMap: this.envTex, side: THREE.DoubleSide };
+    switch (kind) {
+      case 'bell': return new THREE.MeshStandardMaterial({ ...env, metalness: 1, roughness: 0.25, envMapIntensity: 1.3 });
+      case 'tube': return new THREE.MeshStandardMaterial({ ...env, metalness: 1, roughness: 0.18, envMapIntensity: 1.4 });
+      case 'gong': return new THREE.MeshStandardMaterial({ ...env, metalness: 0.9, roughness: 0.35, envMapIntensity: 1.2 });
+      case 'glass': return new THREE.MeshStandardMaterial({ ...env, metalness: 0, roughness: 0.03, transparent: true, opacity: 0.38, depthWrite: false, envMapIntensity: 1.8 });
+      default: return new THREE.MeshStandardMaterial({ ...env, roughness: 0.55, envMapIntensity: 0.4 });
+    }
+  }
+
   /** Per-bar colours before and after the hit, by colour mode. */
   private barColors(cfg: MarbleConfig): void {
     this.fresh = [];
@@ -214,7 +265,12 @@ export class MarbleScene {
     const white = new THREE.Color(0xffffff);
     this.barList.forEach((b, i) => {
       let f: THREE.Color, p: THREE.Color;
-      if (cfg.colorMode === 'played') {
+      const natural = NATURAL[this.kinds[i]];
+      if (cfg.colorMode === 'played' && natural) {
+        // Bells, gongs, tubes and glasses keep their own material colour and just brighten when struck.
+        f = new THREE.Color(natural);
+        p = f.clone().lerp(white, 0.3);
+      } else if (cfg.colorMode === 'played') {
         f = new THREE.Color(cfg.barColor);
         p = new THREE.Color(cfg.playedColor);
       } else {
@@ -239,11 +295,12 @@ export class MarbleScene {
     this.scene.fog = new THREE.Fog(bg, near, near + 3 + (1 - cfg.fog) * 14);
     this.wall.visible = cfg.backdrop === 'wall';
     if (this.wire) this.wire.color.set(cfg.holderColor);
-    if (this.bars) {
-      const old = this.bars.material;
+    for (const g of this.groups) {
+      const old = g.mesh.material;
       for (const m of Array.isArray(old) ? old : [old]) m.dispose();
-      this.bars.material = this.barMaterials(cfg.barStyle);
-      this.bars.castShadow = cfg.barStyle !== 'glass';
+      g.mesh.material = g.kind === 'bar' ? this.barMaterials(cfg.barStyle) : this.objectMaterial(g.kind, cfg);
+      g.mesh.castShadow = !(g.kind === 'bar' ? cfg.barStyle === 'glass' : g.kind === 'glass');
+      if (g.kind === 'pad' && g.extra) (g.extra.material as THREE.MeshStandardMaterial).color.set(cfg.holderColor);
     }
     this.barColors(cfg);
     this.renderer.shadowMap.enabled = cfg.shadows;
@@ -262,12 +319,20 @@ export class MarbleScene {
       disposeDeep(obj);
     }
     const R = this.course?.opts.ballRadius ?? 0.11;
-    const sphere = new THREE.Mesh(new THREE.SphereGeometry(R, 48, 32), this.ballMaterial(cfg));
-    const band = new THREE.Mesh(
-      new THREE.TorusGeometry(R * 1.002, R * 0.1, 10, 48),
-      new THREE.MeshStandardMaterial({ color: cfg.stripeColor, roughness: 0.4, metalness: 0.2, emissive: cfg.stripeColor, emissiveIntensity: 0.25 }),
-    );
-    this.ball.add(sphere, band);
+    const mat = this.ballMaterial(cfg);
+    const faceted = cfg.ballShape === 'gem' || cfg.ballShape === 'diamond' || cfg.ballShape === 'star';
+    if (faceted && 'flatShading' in mat) (mat as THREE.MeshStandardMaterial).flatShading = true;
+    const body = cfg.ballShape === 'dice'
+      ? new THREE.Mesh(ballGeometry('dice', R), diceFaces(cfg, mat))
+      : new THREE.Mesh(ballGeometry(cfg.ballShape, R), mat);
+    this.ball.add(body);
+    if (cfg.ballShape === 'sphere' || cfg.ballShape === 'egg') {
+      const band = new THREE.Mesh(
+        new THREE.TorusGeometry(R * 1.002, R * 0.1, 10, 48),
+        new THREE.MeshStandardMaterial({ color: cfg.stripeColor, roughness: 0.4, metalness: 0.2, emissive: cfg.stripeColor, emissiveIntensity: 0.25 }),
+      );
+      this.ball.add(band);
+    }
     this.active.clear();
   }
 
@@ -334,34 +399,41 @@ export class MarbleScene {
     this.renderer.render(this.scene, this.camera);
   }
 
-  /** Bars are orange until hit, then white; a hit adds a short wobble and flash. */
+  /** Objects take their "played" colour once hit; a hit adds a short wobble (or squash) and a flash. */
   private paintBars(t: number, cfg: MarbleConfig): void {
-    const mesh = this.bars;
-    if (!mesh) return;
     const flash = new THREE.Color(0xffffff);
     const tmp = new THREE.Color();
     const now = new Set<number>();
     const bars = this.barList;
-    for (let i = 0; i < bars.length; i++) {
-      const dt = t - bars[i].hitTime;
-      if (dt < 0) {
-        mesh.setColorAt(i, this.fresh[i]);
-      } else if (dt < RING_TIME) {
-        tmp.copy(this.fresh[i]).lerp(this.played[i], Math.min(1, dt / 0.12));
-        if (cfg.flash) tmp.lerp(flash, 0.6 * Math.exp(-dt * 14));
-        mesh.setColorAt(i, tmp);
-      } else {
-        mesh.setColorAt(i, this.played[i]);
+    for (const { kind, mesh, extra, idx } of this.groups) {
+      for (let j = 0; j < idx.length; j++) {
+        const i = idx[j];
+        const dt = t - bars[i].hitTime;
+        if (dt < 0) {
+          mesh.setColorAt(j, this.fresh[i]);
+        } else if (dt < RING_TIME) {
+          tmp.copy(this.fresh[i]).lerp(this.played[i], Math.min(1, dt / 0.12));
+          if (cfg.flash) tmp.lerp(flash, 0.6 * Math.exp(-dt * 14));
+          mesh.setColorAt(j, tmp);
+        } else {
+          mesh.setColorAt(j, this.played[i]);
+        }
+        let m: THREE.Matrix4 | null = null;
+        if (dt >= 0 && dt < RING_TIME) {
+          now.add(i);
+          m = objectMatrix(kind, bars[i], 0.09 * Math.exp(-dt * 6) * Math.sin(dt * 55));
+        } else if (this.active.has(i)) {
+          m = this.base[i];
+        }
+        if (m) {
+          mesh.setMatrixAt(j, m);
+          extra?.setMatrixAt(j, m);
+        }
       }
-      if (dt >= 0 && dt < RING_TIME) {
-        now.add(i);
-        mesh.setMatrixAt(i, barMatrix(bars[i], 0.09 * Math.exp(-dt * 6) * Math.sin(dt * 55)));
-      } else if (this.active.has(i)) {
-        mesh.setMatrixAt(i, this.base[i]);
-      }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      if (extra) extra.instanceMatrix.needsUpdate = true;
     }
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     this.active = now;
   }
 
@@ -441,12 +513,137 @@ function woodTexture(grain: boolean): THREE.Texture {
   return tex;
 }
 
-/** Placement of a bar, optionally twisted around its long axis by `wobble` radians. */
-function barMatrix(b: Bar, wobble: number): THREE.Matrix4 {
+/** Natural colours for objects that are not tinted like bars in "played" colour mode. */
+const NATURAL: Partial<Record<StrikerKind, string>> = { bell: '#e2ad38', tube: '#c8ccd3', gong: '#c4892c', glass: '#d6ecff' };
+
+/**
+ * Unit geometry of each object in its local frame: the struck surface is at y = 0
+ * facing +Y (the plate normal), the body extends to -Y, X is the upright long axis.
+ */
+function objectGeometry(kind: StrikerKind): THREE.BufferGeometry {
+  switch (kind) {
+    case 'bell': {
+      const prof = [[0.001, 1], [0.12, 0.99], [0.2, 0.93], [0.24, 0.8], [0.26, 0.6], [0.3, 0.38], [0.38, 0.16], [0.44, 0.04], [0.45, 0]]
+        .map(([r, y]) => new THREE.Vector2(r, y));
+      return new THREE.LatheGeometry(prof, 32).rotateZ(-Math.PI / 2).translate(-0.5, -0.45, 0);
+    }
+    case 'glass': {
+      const prof = [[0.001, 0], [0.22, 0], [0.22, 0.02], [0.035, 0.05], [0.03, 0.42], [0.12, 0.47], [0.26, 0.6], [0.3, 0.78], [0.29, 0.95], [0.27, 1]]
+        .map(([r, y]) => new THREE.Vector2(r, y));
+      return new THREE.LatheGeometry(prof, 32).rotateZ(-Math.PI / 2).translate(-0.5, -0.3, 0);
+    }
+    case 'tube':
+      return new THREE.CylinderGeometry(0.5, 0.5, 1, 18).rotateZ(-Math.PI / 2).translate(0, -0.5, 0);
+    case 'drum':
+      return new THREE.CylinderGeometry(0.5, 0.5, 1, 28).translate(0, -0.5, 0);
+    case 'gong':
+      return new THREE.CylinderGeometry(0.5, 0.5, 1, 36).translate(0, -0.5, 0);
+    case 'pad':
+      return new THREE.CylinderGeometry(0.47, 0.47, 1, 28).translate(0, -0.5, 0);
+    default:
+      return new THREE.BoxGeometry(1, 1, 1).translate(0, -0.5, 0);
+  }
+}
+
+/** World size of an object along its local axes (x: upright, y: depth behind the struck face, z). */
+function objectScale(kind: StrikerKind, b: Bar): THREE.Vector3 {
+  const L = b.length;
+  switch (kind) {
+    case 'bell': return new THREE.Vector3(L * 0.95, L * 0.95, L * 0.95);
+    case 'glass': return new THREE.Vector3(L * 1.05, L * 1.05, L * 1.05);
+    case 'tube': return new THREE.Vector3(L * 1.6, 0.1, 0.1);
+    case 'drum': return new THREE.Vector3(L * 0.85, L * 0.38, L * 0.85);
+    case 'gong': return new THREE.Vector3(L * 1.2, 0.035, L * 1.2);
+    case 'pad': return new THREE.Vector3(L * 0.85, 0.07, L * 0.85);
+    default: return new THREE.Vector3(L, THICK, b.width);
+  }
+}
+
+/** How far the object reaches behind its face, and half its upright size (for holders). */
+function objectExtent(kind: StrikerKind, b: Bar): { depth: number; half: number } {
+  const s = objectScale(kind, b);
+  const depth = kind === 'bell' ? s.y * 0.9 : kind === 'glass' ? s.y * 0.6 : s.y;
+  return { depth, half: s.x / 2 };
+}
+
+/**
+ * Placement of an object. `wobble` (radians) twists bars and gongs, swings bells,
+ * tubes and glasses, and squashes drums and pads.
+ */
+function objectMatrix(kind: StrikerKind, b: Bar, wobble: number): THREE.Matrix4 {
   const a = v3(b.axis), n = v3(b.normal);
-  if (wobble) n.applyAxisAngle(a, wobble);
+  const surf = v3(b.center).addScaledVector(n, THICK / 2);
+  const scale = objectScale(kind, b);
+  if (wobble) {
+    if (kind === 'bell' || kind === 'tube' || kind === 'glass') {
+      const w = new THREE.Vector3().crossVectors(a, n).normalize();
+      a.applyAxisAngle(w, wobble * 1.6);
+      n.applyAxisAngle(w, wobble * 1.6);
+    } else if (kind === 'drum' || kind === 'pad') {
+      scale.y *= 1 - Math.abs(wobble) * (kind === 'pad' ? 5 : 2);
+    } else {
+      n.applyAxisAngle(a, wobble);
+    }
+  }
   const w = new THREE.Vector3().crossVectors(a, n);
-  return new THREE.Matrix4().makeBasis(a, n, w).scale(new THREE.Vector3(b.length, THICK, b.width)).setPosition(v3(b.center));
+  return new THREE.Matrix4().makeBasis(a, n, w).scale(scale).setPosition(surf);
+}
+
+/** Ball geometry of radius about R for each shape. */
+function ballGeometry(shape: MarbleConfig['ballShape'], R: number): THREE.BufferGeometry {
+  switch (shape) {
+    case 'cube':
+    case 'dice':
+      return new THREE.BoxGeometry(R * 1.55, R * 1.55, R * 1.55);
+    case 'gem':
+      return new THREE.IcosahedronGeometry(R * 1.1, 0);
+    case 'diamond':
+      return new THREE.OctahedronGeometry(R * 1.25, 0);
+    case 'capsule':
+      return new THREE.CapsuleGeometry(R * 0.62, R * 0.9, 8, 24);
+    case 'egg':
+      return new THREE.SphereGeometry(R, 40, 28).scale(0.9, 1.22, 0.9);
+    case 'star': {
+      const sh = new THREE.Shape();
+      for (let k = 0; k <= 10; k++) {
+        const r = k % 2 === 0 ? R * 1.35 : R * 0.6;
+        const ang = (k / 10) * Math.PI * 2 + Math.PI / 2;
+        if (k === 0) sh.moveTo(Math.cos(ang) * r, Math.sin(ang) * r);
+        else sh.lineTo(Math.cos(ang) * r, Math.sin(ang) * r);
+      }
+      return new THREE.ExtrudeGeometry(sh, { depth: R * 0.7, bevelEnabled: true, bevelSize: R * 0.12, bevelThickness: R * 0.12, bevelSegments: 2 })
+        .translate(0, 0, -R * 0.35);
+    }
+    default:
+      return new THREE.SphereGeometry(R, 48, 32);
+  }
+}
+
+/** Six dice faces (1–6 pips) on the ball material's colour. */
+function diceFaces(cfg: MarbleConfig, base: THREE.Material): THREE.Material[] {
+  const pips: Record<number, [number, number][]> = {
+    1: [[0.5, 0.5]], 2: [[0.28, 0.28], [0.72, 0.72]], 3: [[0.25, 0.25], [0.5, 0.5], [0.75, 0.75]],
+    4: [[0.28, 0.28], [0.72, 0.28], [0.28, 0.72], [0.72, 0.72]],
+    5: [[0.28, 0.28], [0.72, 0.28], [0.5, 0.5], [0.28, 0.72], [0.72, 0.72]],
+    6: [[0.28, 0.25], [0.72, 0.25], [0.28, 0.5], [0.72, 0.5], [0.28, 0.75], [0.72, 0.75]],
+  };
+  base.dispose();
+  return [1, 6, 2, 5, 3, 4].map((n) => {
+    const c = new OffscreenCanvas(128, 128);
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = cfg.ballColor;
+    ctx.fillRect(0, 0, 128, 128);
+    ctx.fillStyle = cfg.stripeColor;
+    for (const [x, y] of pips[n]) {
+      ctx.beginPath();
+      ctx.arc(x * 128, y * 128, 12, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const tex = new THREE.CanvasTexture(c as unknown as HTMLCanvasElement);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.userData.owned = true;
+    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.35, metalness: 0.05 });
+  });
 }
 
 /** Matrix that turns a unit cylinder (height 1 along Y) into a rod from a to b. */
@@ -468,8 +665,12 @@ function disposeDeep(obj: THREE.Object3D): void {
     const m = o as THREE.Mesh;
     m.geometry?.dispose();
     const mat = m.material as THREE.Material | THREE.Material[] | undefined;
-    if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
-    else mat?.dispose();
+    for (const x of Array.isArray(mat) ? mat : mat ? [mat] : []) {
+      // Shared textures (wood grain, pin holes) stay; per-object ones (dice faces) go.
+      const map = (x as THREE.MeshStandardMaterial).map;
+      if (map?.userData.owned) map.dispose();
+      x.dispose();
+    }
   });
 }
 

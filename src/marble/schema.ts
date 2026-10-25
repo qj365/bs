@@ -4,7 +4,7 @@ import { MARBLE_THEMES, type MarbleConfig } from './config';
 
 const INSTRUMENTS: [string, string][] = [
   ['marimba', 'Marimba (gỗ)'], ['musicbox', 'Hộp nhạc'], ['bell', 'Chuông'], ['piano', 'Piano'], ['harp', 'Đàn hạc'],
-  ['pluck', 'Gảy dây'], ['glass', 'ASMR · thủy tinh'], ['wood', 'ASMR · gỗ'], ['marble', 'ASMR · bi ve'], ['chip', '8-bit'],
+  ['pluck', 'Gảy dây'], ['glass', 'ASMR · thủy tinh'], ['wood', 'ASMR · gỗ'], ['marble', 'ASMR · bi ve'], ['drum', 'Trống'], ['gong', 'Cồng chiêng'], ['boing', 'Lò xo (boing)'], ['chip', '8-bit'],
 ];
 
 export const MARBLE_GROUPS: Group<MarbleConfig>[] = [
@@ -54,6 +54,11 @@ export const MARBLE_GROUPS: Group<MarbleConfig>[] = [
         options: MARBLE_THEMES.map((t) => [t.id, t.label] as [string, string]),
       },
       {
+        key: 'striker', label: 'Bi gõ vào', type: 'select',
+        options: [['bar', '🟧 Tấm phím (xylophone)'], ['bell', '🔔 Chuông'], ['drum', '🥁 Trống'], ['glass', '🍷 Ly thủy tinh'], ['tube', '🎐 Ống chuông gió'], ['gong', '🪘 Cồng chiêng'], ['pad', '🛞 Đệm lò xo'], ['mixed', '🎼 Trộn theo cao độ (trống → phím → chuông → ly)']],
+        hint: 'Dãy nốt nhanh vẫn lăn trên dãy phím',
+      },
+      {
         key: 'barStyle', label: 'Chất liệu phím', type: 'select', live: true,
         options: [['wood', 'Gỗ vân'], ['plain', 'Trơn'], ['glass', 'Kính trong'], ['metal', 'Kim loại'], ['neon', 'Neon phát sáng']],
       },
@@ -66,6 +71,10 @@ export const MARBLE_GROUPS: Group<MarbleConfig>[] = [
       { key: 'barColor', label: 'Phím chưa gõ', type: 'color', live: true },
       { key: 'playedColor', label: 'Phím đã gõ', type: 'color', live: true },
       { key: 'holderColor', label: 'Giá đỡ', type: 'color' },
+      {
+        key: 'ballShape', label: 'Hình dạng bi', type: 'select', live: true,
+        options: [['sphere', '⚪ Cầu'], ['cube', '🧊 Khối vuông'], ['dice', '🎲 Xúc xắc'], ['gem', '💠 Đá quý'], ['diamond', '💎 Kim cương'], ['capsule', '💊 Viên nang'], ['egg', '🥚 Quả trứng'], ['star', '⭐ Ngôi sao']],
+      },
       {
         key: 'ballStyle', label: 'Kiểu bi', type: 'select', live: true,
         options: [['steel', 'Thép'], ['gold', 'Vàng'], ['glass', 'Thủy tinh'], ['glow', 'Phát sáng'], ['plastic', 'Nhựa màu']],
@@ -102,6 +111,7 @@ export const MARBLE_GROUPS: Group<MarbleConfig>[] = [
     title: '🔊 Âm thanh',
     fields: [
       { key: 'sound', label: 'Bật âm thanh', type: 'checkbox', live: true },
+      { key: 'strikerSound', label: 'Mỗi loại vật có tiếng riêng (chuông, trống, ly, cồng…)', type: 'checkbox', live: true, hint: 'Tắt thì mọi vật dùng 2 nhạc cụ bên dưới' },
       { key: 'lowInstrument', label: 'Nhạc cụ 1 (nốt trầm)', type: 'select', live: true, options: INSTRUMENTS },
       { key: 'highInstrument', label: 'Nhạc cụ 2 (nốt cao)', type: 'select', live: true, options: INSTRUMENTS },
       { key: 'rollSound', label: 'Tiếng bi lăn trên ray / máng', type: 'checkbox', live: true },

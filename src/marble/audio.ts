@@ -1,7 +1,7 @@
 import { buildMaster, playNote } from '../audio/synth';
 import { Rng } from '../rng';
 import type { Course, Hit } from './choreo';
-import type { MarbleConfig } from './config';
+import { instrumentFor, type MarbleConfig } from './config';
 
 let noise: AudioBuffer | null = null;
 
@@ -15,12 +15,12 @@ function noiseBuffer(ctx: BaseAudioContext): AudioBuffer {
   return noise;
 }
 
-/** One struck bar: wooden bars use the low instrument, white bars the high one. */
+/** One struck object: its own sound, or the low/high instrument for bars. */
 export function playHit(ctx: BaseAudioContext, out: AudioNode, cfg: MarbleConfig, hit: Hit, when: number): void {
   const pan = ctx.createStereoPanner();
   pan.pan.value = hit.pan * 0.6;
   pan.connect(out);
-  const inst = hit.kind === 'wood' ? cfg.lowInstrument : cfg.highInstrument;
+  const inst = instrumentFor(cfg, hit.notes, hit.row, hit.kind === 'wood');
   const vel = 0.85 / Math.sqrt(hit.notes.length);
   for (const n of hit.notes) playNote(ctx, pan, inst, n, when, vel);
 }

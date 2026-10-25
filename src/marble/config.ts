@@ -9,6 +9,10 @@ export type BallStyle = 'steel' | 'gold' | 'glass' | 'glow' | 'plastic';
 /** side: classic view · top: looking down the shaft · orbit: slowly circles the ball · close: low and near */
 export type CameraMode = 'side' | 'top' | 'orbit' | 'close';
 export type Backdrop = 'wall' | 'void';
+export type BallShape = 'sphere' | 'cube' | 'dice' | 'gem' | 'diamond' | 'capsule' | 'egg' | 'star';
+/** What the ball strikes. 'mixed' picks by pitch: gong, drum, bar, bell, glass from low to high. */
+export type Striker = 'bar' | 'bell' | 'drum' | 'glass' | 'tube' | 'gong' | 'pad' | 'mixed';
+export type StrikerKind = Exclude<Striker, 'mixed'>;
 
 /** Settings for the 3D marble music machine. */
 export interface MarbleConfig {
@@ -37,6 +41,10 @@ export interface MarbleConfig {
   cameraMode: CameraMode;
   backdrop: Backdrop;
   sparks: boolean;
+  ballShape: BallShape;
+  striker: Striker;
+  /** Each kind of object plays its own sound (bell → bell, drum → drum…); bars use the two instruments. */
+  strikerSound: boolean;
   bgColor: string;
   fog: number;
   /** Bars not played yet. */
@@ -94,6 +102,9 @@ export const DEFAULT_MARBLE: MarbleConfig = {
   cameraMode: 'side',
   backdrop: 'wall',
   sparks: false,
+  ballShape: 'sphere',
+  striker: 'bar',
+  strikerSound: true,
   bgColor: '#3a4458',
   fog: 0.45,
   barColor: '#ffa515',
@@ -235,4 +246,26 @@ export function applyTheme(cfg: MarbleConfig, id: string): void {
   if (!theme) return;
   Object.assign(cfg, theme.overrides);
   cfg.theme = id;
+}
+
+/** The object a note is played on. Rolling rows are always bars (a xylophone run). */
+export function strikerFor(cfg: Pick<MarbleConfig, 'striker'>, notes: number[], inRow: boolean): StrikerKind {
+  if (inRow) return 'bar';
+  if (cfg.striker !== 'mixed') return cfg.striker;
+  const m = Math.min(...notes);
+  if (m < 50) return 'gong';
+  if (m < 58) return 'drum';
+  if (m < 70) return 'bar';
+  if (m < 79) return 'bell';
+  return 'glass';
+}
+
+const STRIKER_SOUND: Record<StrikerKind, Instrument | null> = {
+  bar: null, bell: 'bell', drum: 'drum', glass: 'glass', tube: 'musicbox', gong: 'gong', pad: 'boing',
+};
+
+/** Instrument for a hit: the object's own sound, or the low/high instrument for bars. */
+export function instrumentFor(cfg: MarbleConfig, notes: number[], inRow: boolean, wood: boolean): Instrument {
+  const own = cfg.strikerSound ? STRIKER_SOUND[strikerFor(cfg, notes, inRow)] : null;
+  return own ?? (wood ? cfg.lowInstrument : cfg.highInstrument);
 }

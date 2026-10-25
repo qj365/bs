@@ -162,7 +162,7 @@ export const GROUPS: Group[] = [
         options: [
           ['marimba', 'Marimba'], ['piano', 'Piano'], ['bell', 'Chuông'], ['musicbox', 'Hộp nhạc'], ['harp', 'Đàn hạc'],
           ['guitar', 'Guitar'], ['pluck', 'Gảy dây'], ['organ', 'Organ'], ['synth', 'Synth'], ['pop', 'Pop (bụp)'],
-          ['chip', '8-bit'], ['glass', 'ASMR · thủy tinh'], ['marble', 'ASMR · bi ve'], ['wood', 'ASMR · gỗ'], ['drop', 'ASMR · giọt nước'],
+          ['chip', '8-bit'], ['glass', 'ASMR · thủy tinh'], ['marble', 'ASMR · bi ve'], ['wood', 'ASMR · gỗ'], ['drop', 'ASMR · giọt nước'], ['drum', 'Trống'], ['gong', 'Cồng chiêng'], ['boing', 'Lò xo (boing)'],
           ['sample', '🎙 Âm thanh của bạn'],
         ],
       },

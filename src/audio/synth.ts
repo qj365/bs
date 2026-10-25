@@ -214,6 +214,54 @@ export function playNote(
       o.frequency.exponentialRampToValueAtTime(f, when + 0.05);
       break;
     }
+    case 'drum': {
+      // Tuned tom: a sine that drops in pitch plus a short noise slap for the skin.
+      const fd = Math.max(55, Math.min(320, f / 2));
+      const g = envelope(ctx, when, 0.7 * v, 0.55);
+      g.connect(out);
+      const o = osc(ctx, 'sine', fd * 1.6, when, 0.55, g);
+      o.frequency.exponentialRampToValueAtTime(fd, when + 0.12);
+      const n = ctx.createBufferSource();
+      n.buffer = noiseBuffer(ctx);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 1800;
+      bp.Q.value = 0.7;
+      const ng = envelope(ctx, when, 0.35 * v, 0.06);
+      n.connect(bp).connect(ng).connect(out);
+      n.start(when);
+      n.stop(when + 0.1);
+      break;
+    }
+    case 'gong': {
+      // Inharmonic partials with a long shimmering decay.
+      const g = envelope(ctx, when, 0.22 * v, 4);
+      g.connect(out);
+      const base = f / 2;
+      [1, 1.48, 2.09, 2.72, 3.43, 4.16].forEach((k, i) => {
+        const pg = ctx.createGain();
+        pg.gain.value = 1 / (i + 1);
+        pg.connect(g);
+        osc(ctx, 'sine', base * k, when, 4, pg).detune.setValueAtTime((i % 2 ? 1 : -1) * 6, when);
+      });
+      break;
+    }
+    case 'boing': {
+      // Spring pad: pitch springs up and wobbles.
+      const g = envelope(ctx, when, 0.35 * v, 0.5);
+      g.connect(out);
+      const o = osc(ctx, 'sine', f * 0.5, when, 0.5, g);
+      o.frequency.exponentialRampToValueAtTime(f, when + 0.08);
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 14;
+      const depth = ctx.createGain();
+      depth.gain.setValueAtTime(f * 0.08, when);
+      depth.gain.exponentialRampToValueAtTime(1, when + 0.5);
+      lfo.connect(depth).connect(o.frequency);
+      lfo.start(when);
+      lfo.stop(when + 0.55);
+      break;
+    }
     case 'chip': {
       const g = envelope(ctx, when, 0.14 * v, 0.22);
       g.connect(out);

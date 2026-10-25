@@ -122,7 +122,7 @@ let needsDraw = true;
 
 const LOOK_KEYS = new Set<keyof MarbleConfig>([
   'bgColor', 'fog', 'barColor', 'playedColor', 'ballColor', 'stripeColor', 'light', 'shadows', 'flash', 'cameraDistance',
-  'barStyle', 'colorMode', 'ballStyle', 'backdrop', 'theme',
+  'barStyle', 'colorMode', 'ballStyle', 'backdrop', 'theme', 'ballShape',
 ]);
 
 const panel = new Panel<MarbleConfig>($('panel'), cfg, {

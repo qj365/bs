@@ -89,6 +89,8 @@ Trang riêng `marble.html`, chuyển qua lại với Ball Studio 2D bằng tab t
   - **9 chủ đề:** Cổ điển, Neon đêm, Pha lê, Kẹo ngọt, Vàng kim, Đại dương, Rừng gỗ, Cầu vồng, Hoàng hôn.
   - **Chất liệu phím:** gỗ vân, trơn, kính, kim loại, neon phát sáng.
   - **Tô màu phím:** đổi màu khi gõ, cầu vồng theo cao độ, ngẫu nhiên.
+  - **Bi gõ vào:** tấm phím, chuông, trống, ly thủy tinh, ống chuông gió, cồng chiêng, đệm lò xo, hoặc trộn theo cao độ (nốt trầm → cồng, trống; giữa → phím; cao → chuông, ly). Mỗi loại có tiếng riêng (có thể tắt để dùng 2 nhạc cụ chung). Dãy nốt nhanh vẫn lăn trên dãy phím.
+  - **Hình dạng bi:** cầu, khối vuông, xúc xắc, đá quý, kim cương, viên nang, quả trứng, ngôi sao.
   - **Kiểu bi:** thép, vàng, thủy tinh, phát sáng, nhựa màu.
   - **Camera:** ngang chéo, từ trên xuống, xoay vòng quanh bi, cận cảnh.
   - **Phông nền:** tường hoặc khoảng không; có tia lửa khi chạm phím.

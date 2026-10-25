@@ -162,11 +162,16 @@ test('theme and look options apply', async ({ page, errors }) => {
   expect(c.barStyle).toBe('neon');
   expect(c.sparks).toBe(true);
   await expect(page.locator('.row[data-key="barStyle"] select')).toHaveValue('neon');
-  for (const [key, value] of [['layout', 'spiral'], ['cameraMode', 'orbit'], ['ballStyle', 'glass'], ['backdrop', 'wall'], ['colorMode', 'random']]) {
+  for (const [key, value] of [['layout', 'spiral'], ['cameraMode', 'orbit'], ['ballStyle', 'glass'], ['backdrop', 'wall'], ['colorMode', 'random'], ['striker', 'mixed'], ['ballShape', 'dice']]) {
     await page.selectOption(`.row[data-key="${key}"] select`, value);
   }
   c = await marble(page, 'config');
-  expect([c.layout, c.cameraMode, c.ballStyle, c.colorMode]).toEqual(['spiral', 'orbit', 'glass', 'random']);
+  expect([c.layout, c.cameraMode, c.ballStyle, c.colorMode, c.striker, c.ballShape]).toEqual(['spiral', 'orbit', 'glass', 'random', 'mixed', 'dice']);
+  // Every kind of struck object builds and renders.
+  for (const striker of ['bell', 'drum', 'glass', 'tube', 'gong', 'pad']) {
+    await page.selectOption('.row[data-key="striker"] select', striker);
+    expect((await marble(page, 'config')).striker).toBe(striker);
+  }
   await page.locator('#scrub').evaluate((el: HTMLInputElement) => {
     el.value = '5';
     el.dispatchEvent(new Event('input'));

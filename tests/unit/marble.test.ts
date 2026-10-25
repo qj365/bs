@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ballAt, buildCourse, cameraTarget, stepsToNotes, type MarbleNote, type Vec3 } from '../../src/marble/choreo';
-import { applyTheme, DEFAULT_MARBLE, MARBLE_THEMES, midiToNotes, songNotes, courseOptions, sanitizeMarble } from '../../src/marble/config';
+import { applyTheme, DEFAULT_MARBLE, instrumentFor, MARBLE_THEMES, strikerFor, midiToNotes, songNotes, courseOptions, sanitizeMarble } from '../../src/marble/config';
 import { randomMarble } from '../../src/marble/random';
 import { Rng } from '../../src/rng';
 
@@ -115,5 +115,31 @@ describe('marble variety', () => {
     expect(locked.theme).toBe(DEFAULT_MARBLE.theme);
     expect(locked.title).toBe('X');
     expect(sanitizeMarble(JSON.parse(JSON.stringify(free[0])))).toEqual(free[0]);
+  });
+});
+
+describe('marble objects', () => {
+  it('mixed mode picks objects by pitch; rows stay bars', () => {
+    const cfg = { striker: 'mixed' as const };
+    expect(strikerFor(cfg, [45], false)).toBe('gong');
+    expect(strikerFor(cfg, [55], false)).toBe('drum');
+    expect(strikerFor(cfg, [64], false)).toBe('bar');
+    expect(strikerFor(cfg, [74], false)).toBe('bell');
+    expect(strikerFor(cfg, [84], false)).toBe('glass');
+    expect(strikerFor(cfg, [84], true)).toBe('bar');
+    expect(strikerFor({ striker: 'pad' }, [60], false)).toBe('pad');
+  });
+
+  it('each object has its own sound unless turned off', () => {
+    const base = { ...DEFAULT_MARBLE, striker: 'drum' as const };
+    expect(instrumentFor(base, [60], false, true)).toBe('drum');
+    expect(instrumentFor({ ...base, striker: 'bell' }, [60], false, true)).toBe('bell');
+    expect(instrumentFor(base, [60], true, true)).toBe(base.lowInstrument);
+    expect(instrumentFor({ ...base, strikerSound: false }, [80], false, false)).toBe(base.highInstrument);
+  });
+
+  it('hits record whether they are on a row', () => {
+    const c = buildCourse(mixed(), { seed: 3 });
+    expect(c.hits.filter((h) => h.row).length).toBe(c.bars.filter((b) => b.inRow).length);
   });
 });

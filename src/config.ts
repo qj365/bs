@@ -3,7 +3,7 @@ export type Mode =
   | 'spiral' | 'trail' | 'merge' | 'koth' | 'symmetric';
 export type Instrument =
   | 'marimba' | 'piano' | 'bell' | 'pluck' | 'guitar' | 'harp' | 'musicbox' | 'organ' | 'synth' | 'pop' | 'chip'
-  | 'glass' | 'marble' | 'wood' | 'drop' | 'sample';
+  | 'glass' | 'marble' | 'wood' | 'drop' | 'drum' | 'gong' | 'boing' | 'sample';
 export type NoteMode = 'melody' | 'scale' | 'random' | 'size';
 export type ColorMode = 'rainbow' | 'solid' | 'cycle';
 export type ScaleName = 'major' | 'minor' | 'pentatonic' | 'blues' | 'japanese' | 'chromatic';
