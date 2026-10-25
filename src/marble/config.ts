@@ -22,13 +22,18 @@ export interface MarbleConfig {
 
   bgColor: string;
   fog: number;
-  woodColor: string;
-  whiteColor: string;
+  /** Bars not played yet. */
+  barColor: string;
+  /** Bars after the ball has hit them. */
+  playedColor: string;
   holderColor: string;
   ballColor: string;
   stripeColor: string;
-  cameraHeight: number;
-  cameraTilt: number;
+  cameraDistance: number;
+  /** Degrees around the shaft (0 = straight from the front). */
+  cameraAngle: number;
+  /** Degrees above the ball. */
+  cameraElevation: number;
   light: number;
   shadows: boolean;
   flash: boolean;
@@ -65,14 +70,15 @@ export const DEFAULT_MARBLE: MarbleConfig = {
   restGap: DEFAULT_COURSE.restGap,
   splitPitch: DEFAULT_COURSE.splitPitch,
   bgColor: '#3a4458',
-  fog: 0.5,
-  woodColor: '#e0a640',
-  whiteColor: '#f2f0ea',
-  holderColor: '#16171c',
-  ballColor: '#c9ced6',
+  fog: 0.45,
+  barColor: '#ffa515',
+  playedColor: '#f4f4f2',
+  holderColor: '#101216',
+  ballColor: '#555a63',
   stripeColor: '#d8262c',
-  cameraHeight: 5,
-  cameraTilt: 0.25,
+  cameraDistance: 3.4,
+  cameraAngle: 25,
+  cameraElevation: 12,
   light: 1,
   shadows: true,
   flash: true,

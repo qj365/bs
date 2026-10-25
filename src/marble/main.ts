@@ -118,7 +118,7 @@ function loop(now: number): void {
 }
 let needsDraw = true;
 
-const LOOK_KEYS = new Set<keyof MarbleConfig>(['bgColor', 'fog', 'woodColor', 'whiteColor', 'ballColor', 'stripeColor', 'light', 'shadows', 'flash']);
+const LOOK_KEYS = new Set<keyof MarbleConfig>(['bgColor', 'fog', 'barColor', 'playedColor', 'ballColor', 'stripeColor', 'light', 'shadows', 'flash', 'cameraDistance']);
 
 const panel = new Panel<MarbleConfig>($('panel'), cfg, {
   onChange(key, live) {

@@ -9,26 +9,34 @@ type Canvas2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
 const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 const RING_TIME = 0.9;
+const THICK = 0.07;
 
 /**
- * The 3D marble machine: wooden / white bars on black holders, rails, curved ramps
- * and a steel ball, rendered with Three.js. Everything is a pure function of time,
- * so preview scrubbing and export frames match exactly. Works on a regular canvas
- * and on an OffscreenCanvas inside a worker.
+ * The 3D marble machine in the look of the classic "marble music" videos: orange
+ * wooden bars that turn white once played, black wire brackets, rails and curved
+ * ramps, a dark steel ball carrying a light that throws the bars' shadows onto
+ * the wall behind. Everything is a pure function of time, so preview scrubbing
+ * and export frames match exactly. Works on a canvas and on an OffscreenCanvas
+ * inside a worker.
  */
 export class MarbleScene {
   readonly renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
-  private spot: THREE.SpotLight;
+  private lamp: THREE.SpotLight;
   private hemi: THREE.HemisphereLight;
+  private key = new THREE.DirectionalLight(0xfff4e6, 1.3);
+  private wall: THREE.Mesh;
   private ball: THREE.Group;
   private course: Course | null = null;
   private dynamic = new THREE.Group();
-  private meshes: { kind: Bar['kind']; mesh: THREE.InstancedMesh; bars: Bar[]; base: THREE.Matrix4[]; color: THREE.Color[] }[] = [];
-  private active = new Set<string>();
+  private bars: THREE.InstancedMesh | null = null;
+  private barList: Bar[] = [];
+  private base: THREE.Matrix4[] = [];
+  private active = new Set<number>();
   private cfg: MarbleConfig | null = null;
   private envTex: THREE.Texture;
+  private woodTex: THREE.Texture;
 
   constructor(readonly canvas: AnyCanvas, width: number, height: number) {
     this.renderer = new THREE.WebGLRenderer({ canvas: canvas as HTMLCanvasElement, antialias: true, preserveDrawingBuffer: true });
@@ -41,16 +49,21 @@ export class MarbleScene {
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
+    this.woodTex = woodTexture();
 
-    this.camera = new THREE.PerspectiveCamera(42, width / height, 0.6, 80);
-    this.hemi = new THREE.HemisphereLight(0xc8d4ff, 0x20242e, 0.5);
-    this.spot = new THREE.SpotLight(0xfff3e0, 80, 16, 0.8, 0.55, 1.4);
-    this.spot.shadow.mapSize.set(1024, 1024);
-    this.spot.shadow.bias = -0.0005;
-    this.spot.shadow.camera.near = 0.3;
-    this.scene.add(this.hemi, this.spot, this.spot.target, this.dynamic);
-
-    // Steel ball with a red band, so its spin is visible.
+    this.camera = new THREE.PerspectiveCamera(68, width / height, 0.1, 60);
+    this.hemi = new THREE.HemisphereLight(0xc8d4ff, 0x1a1e28, 0.35);
+    // The lamp rides with the ball and shines away from the camera, so every bar
+    // near the ball casts a long shadow streak on the wall.
+    this.lamp = new THREE.SpotLight(0xe8f0ff, 40, 0, 1.35, 1, 1.6);
+    this.lamp.shadow.mapSize.set(1024, 1024);
+    this.lamp.shadow.bias = -0.0008;
+    this.lamp.shadow.intensity = 0.7;
+    this.lamp.shadow.camera.near = 0.05;
+    this.lamp.shadow.camera.far = 20;
+    this.wall = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ color: 0x3a4458, roughness: 1 }));
+    this.wall.receiveShadow = true;
+    this.scene.add(this.hemi, this.key, this.key.target, this.lamp, this.lamp.target, this.wall, this.dynamic);
     this.ball = new THREE.Group();
     this.scene.add(this.ball);
   }
@@ -64,70 +77,62 @@ export class MarbleScene {
   /** Rebuilds all geometry for a new course / look. */
   setCourse(course: Course, cfg: MarbleConfig): void {
     this.course = course;
-    this.applyLook(cfg);
     for (const obj of [...this.dynamic.children]) {
       this.dynamic.remove(obj);
       disposeDeep(obj);
     }
-    this.meshes = [];
     this.active.clear();
+    this.bars = null;
+    this.barList = course.bars;
+    this.base = [];
 
     const box = new THREE.BoxGeometry(1, 1, 1);
-    const holderMat = new THREE.MeshStandardMaterial({ color: cfg.holderColor, roughness: 0.6, metalness: 0.2 });
-    for (const kind of ['wood', 'white'] as const) {
-      const bars = course.bars.filter((b) => b.kind === kind);
-      if (bars.length === 0) continue;
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: kind === 'wood' ? 0.55 : 0.3,
-        metalness: kind === 'wood' ? 0 : 0.15,
-        envMap: this.envTex,
-        envMapIntensity: 0.6,
-      });
-      const mesh = new THREE.InstancedMesh(box, mat, bars.length);
+    if (course.bars.length > 0) {
+      // Plate faces (±Y of the box) show the wood grain and the two pin holes.
+      const face = new THREE.MeshStandardMaterial({ map: this.woodTex, roughness: 0.6, envMap: this.envTex, envMapIntensity: 0.35 });
+      const edge = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, envMap: this.envTex, envMapIntensity: 0.3 });
+      const mesh = new THREE.InstancedMesh(box, [edge, edge, face, face, edge, edge], course.bars.length);
       mesh.castShadow = mesh.receiveShadow = true;
-      const baseColor = new THREE.Color(kind === 'wood' ? cfg.woodColor : cfg.whiteColor);
-      const base: THREE.Matrix4[] = [];
-      const colors: THREE.Color[] = [];
-      bars.forEach((b, i) => {
+      course.bars.forEach((b, i) => {
         const m = barMatrix(b, 0);
-        base.push(m);
+        this.base.push(m);
         mesh.setMatrixAt(i, m);
-        const c = vary(baseColor.clone(), i);
-        colors.push(c);
-        mesh.setColorAt(i, c);
+        mesh.setColorAt(i, new THREE.Color(cfg.barColor));
       });
+      this.bars = mesh;
       this.dynamic.add(mesh);
-      this.meshes.push({ kind, mesh, bars, base, color: colors });
     }
 
-    // Black holders: two blocks behind the ends of each free bar.
+    // Black wire brackets (a ㄷ shape behind each free bar, with a knob on top).
     const free = course.bars.filter((b) => !b.inRow);
+    const wire = new THREE.MeshStandardMaterial({ color: cfg.holderColor, roughness: 0.45, metalness: 0.6, envMap: this.envTex });
     if (free.length > 0) {
-      const holders = new THREE.InstancedMesh(box, holderMat, free.length * 2);
-      holders.castShadow = holders.receiveShadow = true;
+      const rods = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 6), wire, free.length * 3);
+      const knobs = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 8, 6), wire, free.length);
+      rods.castShadow = knobs.castShadow = true;
       const m = new THREE.Matrix4();
       free.forEach((b, i) => {
-        for (const s of [-1, 1]) {
-          const n = v3(b.normal), a = v3(b.axis);
-          const w = new THREE.Vector3().crossVectors(a, n);
-          const p = v3(b.center).addScaledVector(a, s * b.length * 0.36).addScaledVector(n, -0.05);
-          m.makeBasis(a, n, w).scale(new THREE.Vector3(0.07, 0.1, b.width * 1.15)).setPosition(p);
-          holders.setMatrixAt(i * 2 + (s > 0 ? 1 : 0), m);
-        }
+        const n = v3(b.normal), a = v3(b.axis), c = v3(b.center);
+        const back = c.clone().addScaledVector(n, -THICK / 2);
+        const depth = 0.16;
+        const ends = [-1, 1].map((s) => back.clone().addScaledVector(a, s * b.length * 0.3));
+        const far = ends.map((p) => p.clone().addScaledVector(n, -depth));
+        rods.setMatrixAt(i * 3, rodMatrix(ends[0], far[0], 0.011, m).clone());
+        rods.setMatrixAt(i * 3 + 1, rodMatrix(ends[1], far[1], 0.011, m).clone());
+        rods.setMatrixAt(i * 3 + 2, rodMatrix(far[0], far[1], 0.011, m).clone());
+        const top = far[0].y > far[1].y ? far[0] : far[1];
+        knobs.setMatrixAt(i, m.makeScale(0.025, 0.025, 0.025).setPosition(top));
       });
-      this.dynamic.add(holders);
+      this.dynamic.add(rods, knobs);
     }
 
-    // Rails under rolling rows.
-    const railMat = new THREE.MeshStandardMaterial({ color: 0x2a2d34, roughness: 0.35, metalness: 0.8, envMap: this.envTex });
+    // Rails under rolling rows, with little posts.
     for (const r of course.rails) {
       const from = v3(r.from), to = v3(r.to);
       const dir = to.clone().sub(from);
-      const side = new THREE.Vector3(0, 1, 0).cross(dir).normalize().multiplyScalar(0.16);
+      const side = new THREE.Vector3(0, 1, 0).cross(dir).normalize().multiplyScalar(0.17);
       for (const s of [-1, 1]) {
-        const a = from.clone().addScaledVector(side, s), b = to.clone().addScaledVector(side, s);
-        this.dynamic.add(rod(a, b, 0.022, railMat));
+        this.dynamic.add(rod(from.clone().addScaledVector(side, s), to.clone().addScaledVector(side, s), 0.016, wire));
       }
     }
 
@@ -141,11 +146,12 @@ export class MarbleScene {
           const rr = ramp.radius + R * 0.75;
           pts.push(new THREE.Vector3(ramp.center[0] + Math.cos(a) * rr, ramp.center[1] + Math.sin(a) * rr, ramp.z + s * R * 0.75));
         }
-        const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 64, 0.025, 8), railMat);
-        tube.castShadow = tube.receiveShadow = true;
+        const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 64, 0.018, 6), wire);
+        tube.castShadow = true;
         this.dynamic.add(tube);
       }
     }
+    this.applyLook(cfg);
   }
 
   /** Colours, fog, lights and ball — no geometry rebuild needed. */
@@ -153,36 +159,35 @@ export class MarbleScene {
     this.cfg = cfg;
     const bg = new THREE.Color(cfg.bgColor);
     this.scene.background = bg;
-    const near = 4 + (1 - cfg.fog) * 6;
-    this.scene.fog = new THREE.Fog(bg, near, near + 4 + (1 - cfg.fog) * 18);
+    (this.wall.material as THREE.MeshStandardMaterial).color.copy(bg);
+    const near = cfg.cameraDistance + 0.5;
+    this.scene.fog = new THREE.Fog(bg, near, near + 3 + (1 - cfg.fog) * 14);
     this.renderer.shadowMap.enabled = cfg.shadows;
-    this.spot.castShadow = cfg.shadows;
-    this.spot.intensity = 80 * cfg.light;
-    this.hemi.intensity = 0.5 * cfg.light;
+    this.lamp.castShadow = cfg.shadows;
+    this.lamp.intensity = 40 * cfg.light;
+    this.hemi.intensity = 0.35 * cfg.light;
+    this.key.intensity = 1.3 * cfg.light;
+    // Materials must recompile when shadows are toggled.
+    this.scene.traverse((o) => {
+      const mat = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      for (const m of Array.isArray(mat) ? mat : mat ? [mat] : []) m.needsUpdate = true;
+    });
 
     for (const obj of [...this.ball.children]) {
       this.ball.remove(obj);
       disposeDeep(obj);
     }
-    const R = this.course?.opts.ballRadius ?? 0.16;
+    const R = this.course?.opts.ballRadius ?? 0.11;
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(R, 48, 32),
-      new THREE.MeshStandardMaterial({ color: cfg.ballColor, metalness: 1, roughness: 0.3, envMap: this.envTex, envMapIntensity: 1.2 }),
+      new THREE.MeshStandardMaterial({ color: cfg.ballColor, metalness: 1, roughness: 0.32, envMap: this.envTex, envMapIntensity: 1 }),
     );
-    sphere.castShadow = true;
     const band = new THREE.Mesh(
-      new THREE.TorusGeometry(R * 1.002, R * 0.09, 10, 48),
-      new THREE.MeshStandardMaterial({ color: cfg.stripeColor, roughness: 0.4, metalness: 0.2 }),
+      new THREE.TorusGeometry(R * 1.002, R * 0.1, 10, 48),
+      new THREE.MeshStandardMaterial({ color: cfg.stripeColor, roughness: 0.4, metalness: 0.2, emissive: cfg.stripeColor, emissiveIntensity: 0.25 }),
     );
     this.ball.add(sphere, band);
-    for (const { kind, mesh, color } of this.meshes) {
-      const base = new THREE.Color(kind === 'wood' ? cfg.woodColor : cfg.whiteColor);
-      color.forEach((c, i) => {
-        vary(c.copy(base), i);
-        mesh.setColorAt(i, c);
-      });
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    }
+    this.active.clear();
   }
 
   /** Renders the frame at course time `t`. */
@@ -199,57 +204,95 @@ export class MarbleScene {
     const axis = new THREE.Vector3(0, 1, 0).cross(q);
     if (axis.lengthSq() > 1e-10) this.ball.quaternion.setFromAxisAngle(axis.normalize(), (t - course.start) * 9);
 
+    // Camera: a little above and to the side, always looking at the ball.
     const target = v3(cameraTarget(course, t));
-    const h = cfg.cameraHeight;
-    this.camera.position.set(target.x, target.y + h, target.z + h * cfg.cameraTilt);
-    this.camera.lookAt(target.x, target.y - 0.6, target.z);
-    this.spot.position.set(p.x * 0.5 + 0.8, p.y + 3.2, p.z + 1.4);
-    this.spot.target.position.copy(p).add(new THREE.Vector3(0, -0.8, 0));
+    const az = (cfg.cameraAngle * Math.PI) / 180;
+    const el = (cfg.cameraElevation * Math.PI) / 180;
+    const dir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
+    this.camera.position.copy(target).addScaledVector(dir, cfg.cameraDistance);
+    this.camera.lookAt(target);
 
-    this.animateBars(t, cfg);
+    // Lamp just in front of the ball, shining at the wall: nearby bars throw long shadow streaks.
+    this.lamp.position.copy(p).addScaledVector(dir, 0.45).add(new THREE.Vector3(0, 0.35, 0));
+    this.lamp.target.position.copy(p).addScaledVector(dir, -5);
+    this.wall.position.copy(target).addScaledVector(dir, -2);
+    // Soft key light from over the camera's shoulder so the bars read clearly.
+    this.key.position.copy(target).addScaledVector(dir, 4).add(new THREE.Vector3(0, 3, 0));
+    this.key.target.position.copy(target);
+    this.wall.lookAt(this.camera.position);
+
+    this.paintBars(t, cfg);
     this.renderer.render(this.scene, this.camera);
   }
 
-  /** Bars ring after a hit: a tiny decaying wobble plus a short flash. */
-  private animateBars(t: number, cfg: MarbleConfig): void {
-    const now = new Set<string>();
+  /** Bars are orange until hit, then white; a hit adds a short wobble and flash. */
+  private paintBars(t: number, cfg: MarbleConfig): void {
+    const mesh = this.bars;
+    if (!mesh) return;
+    const fresh = new THREE.Color(cfg.barColor);
+    const played = new THREE.Color(cfg.playedColor);
     const flash = new THREE.Color(0xffffff);
     const tmp = new THREE.Color();
-    for (let mi = 0; mi < this.meshes.length; mi++) {
-      const { mesh, bars, base, color } = this.meshes[mi];
-      let touched = false;
-      for (let i = 0; i < bars.length; i++) {
-        const dt = t - bars[i].hitTime;
-        const key = mi + ':' + i;
-        if (dt >= 0 && dt < RING_TIME) {
-          now.add(key);
-          mesh.setMatrixAt(i, barMatrix(bars[i], 0.09 * Math.exp(-dt * 6) * Math.sin(dt * 55)));
-          if (cfg.flash) mesh.setColorAt(i, tmp.copy(color[i]).lerp(flash, 0.55 * Math.exp(-dt * 14)));
-          touched = true;
-        } else if (this.active.has(key)) {
-          mesh.setMatrixAt(i, base[i]);
-          mesh.setColorAt(i, color[i]);
-          touched = true;
-        }
+    const now = new Set<number>();
+    const bars = this.barList;
+    for (let i = 0; i < bars.length; i++) {
+      const dt = t - bars[i].hitTime;
+      if (dt < 0) {
+        mesh.setColorAt(i, fresh);
+      } else if (dt < RING_TIME) {
+        tmp.copy(fresh).lerp(played, Math.min(1, dt / 0.12));
+        if (cfg.flash) tmp.lerp(flash, 0.6 * Math.exp(-dt * 14));
+        mesh.setColorAt(i, tmp);
+      } else {
+        mesh.setColorAt(i, played);
       }
-      if (touched) {
-        mesh.instanceMatrix.needsUpdate = true;
-        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      if (dt >= 0 && dt < RING_TIME) {
+        now.add(i);
+        mesh.setMatrixAt(i, barMatrix(bars[i], 0.09 * Math.exp(-dt * 6) * Math.sin(dt * 55)));
+      } else if (this.active.has(i)) {
+        mesh.setMatrixAt(i, this.base[i]);
       }
     }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     this.active = now;
   }
 
   dispose(): void {
     disposeDeep(this.scene);
     this.envTex.dispose();
+    this.woodTex.dispose();
     this.renderer.dispose();
   }
 }
 
-/** Small deterministic per-bar colour variation, like real wood grain. */
-function vary(c: THREE.Color, i: number): THREE.Color {
-  return c.offsetHSL(((i * 0.6180339) % 1 - 0.5) * 0.02, 0, ((i * 0.381966) % 1 - 0.5) * 0.06);
+/** Light wood grain with two dark pin holes; tinted per bar by the instance colour. */
+function woodTexture(): THREE.Texture {
+  const W = 192, H = 96;
+  const c = new OffscreenCanvas(W, H);
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+  // Soft mottling along the bar, like the grain in the original videos.
+  let s = 12345;
+  const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  for (let i = 0; i < 70; i++) {
+    const g = 205 + Math.floor(rnd() * 45);
+    ctx.fillStyle = `rgba(${g},${g},${g},0.55)`;
+    ctx.beginPath();
+    ctx.ellipse(rnd() * W, rnd() * H, 10 + rnd() * 40, 3 + rnd() * 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#141414';
+  for (const u of [0.33, 0.67]) {
+    ctx.beginPath();
+    ctx.arc(u * W, H / 2, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c as unknown as HTMLCanvasElement);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
 }
 
 /** Placement of a bar, optionally twisted around its long axis by `wobble` radians. */
@@ -257,15 +300,20 @@ function barMatrix(b: Bar, wobble: number): THREE.Matrix4 {
   const a = v3(b.axis), n = v3(b.normal);
   if (wobble) n.applyAxisAngle(a, wobble);
   const w = new THREE.Vector3().crossVectors(a, n);
-  return new THREE.Matrix4().makeBasis(a, n, w).scale(new THREE.Vector3(b.length, 0.05, b.width)).setPosition(v3(b.center));
+  return new THREE.Matrix4().makeBasis(a, n, w).scale(new THREE.Vector3(b.length, THICK, b.width)).setPosition(v3(b.center));
+}
+
+/** Matrix that turns a unit cylinder (height 1 along Y) into a rod from a to b. */
+function rodMatrix(a: THREE.Vector3, b: THREE.Vector3, r: number, out: THREE.Matrix4): THREE.Matrix4 {
+  const d = b.clone().sub(a);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+  return out.compose(a.clone().add(b).multiplyScalar(0.5), q, new THREE.Vector3(r, d.length(), r));
 }
 
 function rod(a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material): THREE.Mesh {
-  const len = a.distanceTo(b);
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 10), mat);
-  mesh.position.copy(a).add(b).multiplyScalar(0.5);
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-  mesh.castShadow = mesh.receiveShadow = true;
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 1, 8), mat);
+  mesh.applyMatrix4(rodMatrix(a, b, 1, new THREE.Matrix4()));
+  mesh.castShadow = true;
   return mesh;
 }
 

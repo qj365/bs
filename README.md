@@ -76,14 +76,14 @@ Công cụ tự làm video "bóng nảy" kiểu satisfying/ASMR cho TikTok, Shor
 
 ## Bi rơi 3D (tab "🎵 Bi rơi 3D")
 
-Trang riêng `marble.html`, chuyển qua lại với Ball Studio 2D bằng tab trên đầu trang. Kiểu video: một viên bi thép rơi xuống, gõ vào các phím gỗ và phím trắng để chơi một bài nhạc.
+Trang riêng `marble.html`, chuyển qua lại với Ball Studio 2D bằng tab trên đầu trang. Kiểu video: một viên bi thép rơi xuống, gõ lần lượt vào các phím gỗ để chơi một bài nhạc.
 
 - **Thiết kế ngược từ bài nhạc:** mỗi nốt là một lần bi chạm phím đúng thời điểm, nên video luôn khớp nhạc và không cần tìm seed. Giữa hai lần chạm, bi bay theo parabol tính sẵn. Phím được nghiêng sao cho bi bật đúng tới phím kế tiếp.
 - Nốt nhanh hơn mức đặt (mặc định 0,14 giây, từ 3 nốt trở lên) → **dãy phím lăn trên ray**. Các dãy nối nhau thành cầu thang xoắn vuông quanh trục rơi.
 - Khoảng nghỉ dài → **máng cong**, bi lăn qua máng rồi bay tiếp.
-- Nốt trầm dùng **phím gỗ**, nốt cao dùng **phím trắng**. Ngưỡng cao độ chỉnh được. Phím trầm dài hơn phím cao, giống đàn xylophone thật.
-- Phím rung và lóe sáng khi bị gõ. Có bóng đổ, đèn rọi theo bi, sương mờ ở đáy, camera nhìn từ trên xuống bám theo bi.
-- Âm thanh: phím gỗ và phím trắng dùng 2 nhạc cụ riêng (mặc định marimba và hộp nhạc), âm stereo theo vị trí phím, có tiếng bi lăn trên ray/máng.
+- Giống kiểu video gốc: phím gỗ **màu cam khi chưa gõ, chuyển trắng sau khi gõ**. Mỗi phím có 2 chấm đen và giá đỡ là khung dây đen hình chữ ㄷ. Phím rung và lóe sáng khi bị gõ.
+- Camera nhìn ngang chéo, bi luôn ở giữa khung hình. Đèn đi theo bi chiếu lên tường phía sau, tạo các vệt bóng tỏa ra quanh bi; xa hơn thì chìm vào sương mờ xanh xám. Góc camera, khoảng cách, màu phím, màu bi đều chỉnh được.
+- Âm thanh: nốt trầm và nốt cao dùng 2 nhạc cụ riêng (mặc định marimba và hộp nhạc), âm stereo theo vị trí phím, có tiếng bi lăn trên ray/máng.
 - Nguồn nhạc: 6 bài có sẵn (chỉnh BPM, số lần lặp, dịch giọng) hoặc **file MIDI** (giữ nguyên nhịp gốc, hợp âm gõ cùng lúc).
 - Chữ: tiêu đề ở trên, chữ phụ ở dưới.
 - Tua tức thì đến bất kỳ thời điểm nào, vì vị trí bi tính trực tiếp từ thời gian.

@@ -36,10 +36,10 @@ export interface CourseOptions {
 
 export const DEFAULT_COURSE: CourseOptions = {
   seed: 1,
-  gravity: 14,
-  width: 1.15,
-  descent: 1.8,
-  ballRadius: 0.16,
+  gravity: 6,
+  width: 0.45,
+  descent: 0.75,
+  ballRadius: 0.11,
   rollGap: 0.14,
   restGap: 1.6,
   lead: 0.9,
@@ -126,14 +126,14 @@ function launch(a: Vec3, b: Vec3, g: number, dt: number): Vec3 {
 
 /** Bar size by pitch, like a real xylophone: lower notes get longer bars. */
 function barLength(midi: number): number {
-  return Math.max(0.32, Math.min(0.95, 0.95 - (midi - 48) * 0.014));
+  return Math.max(0.3, Math.min(0.52, 0.52 - (midi - 48) * 0.006));
 }
 
-/** Plate long axis: as close to the world Z axis as the plate allows. */
+/** Plate long axis: as upright as the plate allows, so bars stand like the keys in the videos. */
 function plateAxis(n: Vec3): Vec3 {
-  const z: Vec3 = [0, 0, 1];
-  const a = sub(z, mul(n, dot(n, z)));
-  return len(a) > 1e-3 ? norm(a) : norm(cross(n, [1, 0, 0]));
+  const up: Vec3 = [0, 1, 0];
+  const a = sub(up, mul(n, dot(n, up)));
+  return len(a) > 0.2 ? norm(a) : norm(cross(n, [1, 0, 0]));
 }
 
 /** Groups notes into single hits and rolling runs. */
@@ -182,7 +182,7 @@ export function buildCourse(input: MarbleNote[], options: Partial<CourseOptions>
     side = -side;
     const x = side * o.width * (0.78 + 0.22 * rng.next());
     const z = (rng.next() - 0.5) * 0.5;
-    const y = pos[1] - Math.max(0.25, o.descent * dt * (0.85 + 0.3 * rng.next()));
+    const y = pos[1] - Math.max(0.18, o.descent * dt * (0.85 + 0.3 * rng.next()));
     return [x, y, z];
   };
 
@@ -258,7 +258,7 @@ export function buildCourse(input: MarbleNote[], options: Partial<CourseOptions>
       const target = nextBouncePoint(first.t - time);
       const vIn = flyTo(target, first.t);
       const bar: Bar = {
-        center: pos, normal: [0, 1, 0], axis: [0, 0, 1], length: barLength(Math.min(...first.midi)), width: 0.26,
+        center: pos, normal: [0, 1, 0], axis: [0, 0, 1], length: barLength(Math.min(...first.midi)), width: 0.22,
         kind: kindOf(first.midi), hitTime: first.t, notes: first.midi, inRow: false,
       };
       course.bars.push(bar);
